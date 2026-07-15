@@ -64,12 +64,6 @@ pnpm test         # テストを実行
   ブラウザ上の他サイトからのクロスオリジン読み取りも遮断）
 - ウィンドウ非表示中は描画を完全停止。`prefers-reduced-motion` 対応
 
-## ドキュメント
-
-- [DESIGN.md](./DESIGN.md) — 設計書（仕様の正典）
-- [PHILOSOPHY.md](./PHILOSOPHY.md) — デザイン思想（なぜこの見た目・挙動なのか。開発を引き継ぐ人 / AI エージェントはまずこちら）
-- [AGENTS.md](./AGENTS.md) — AI エージェント向けの最小ガイド
-
 ## 注意
 
 - 本ツールは**非公式**です。Anthropic / OpenAI とは無関係で、各 CLI のログ形式（内部仕様）に

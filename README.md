@@ -65,14 +65,6 @@ Environment variables:
 - Stops rendering completely while the window is hidden and supports
   `prefers-reduced-motion`
 
-## Documentation
-
-The following project documents are currently available in Japanese:
-
-- [DESIGN.md](./DESIGN.md) — canonical design specification
-- [PHILOSOPHY.md](./PHILOSOPHY.md) — design philosophy and rationale; start here when taking over development
-- [AGENTS.md](./AGENTS.md) — minimal guide for AI coding agents
-
 ## Notes
 
 - This is an **unofficial** project and is not affiliated with Anthropic or OpenAI.
