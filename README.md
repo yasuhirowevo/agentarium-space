@@ -84,12 +84,6 @@ The following project documents are currently available in Japanese:
 - Claude context-window usage is approximated using a default window size of
   200000 tokens
 
-## Repository and support policy
-
-This repository is maintained as read-only. Issues, pull requests, and individual
-support requests are not accepted. To report a security issue privately, follow
-[SECURITY.md](./SECURITY.md).
-
 ## License
 
 [MIT](./LICENSE)

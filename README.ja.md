@@ -78,11 +78,6 @@ pnpm test         # テストを実行
 - `run_in_background` で起動された Claude Code の sub-agent は追跡できない場合があります（既知の限界）
 - コンテキスト使用率のうち Claude 分の窓サイズは、既定の 200000 トークンを用いた近似です
 
-## 公開・サポート方針
-
-このリポジトリは読み取り専用で運用し、Issues・Pull Requests・個別サポートを受け付けていません。
-セキュリティ上の問題は [SECURITY.md](./SECURITY.md) の非公開窓口から報告してください。
-
 ## License
 
 [MIT](./LICENSE)
