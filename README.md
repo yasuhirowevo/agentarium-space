@@ -1,68 +1,94 @@
 # Agentarium Space
 
-ローカルで動いている **Claude Code** と **Codex CLI** のセッションを、
-夜の星図の下で発光する生き物たちとして眺めるデスクトップアプリ（Windows / macOS）。
+**English** | [日本語](./README.ja.md)
 
-プロジェクトごとの「潮だまり」の中を、セッションの光る orb がゆっくり漂います。
-ツール実行中は水面に波紋が広がり、考え中はハローがゆっくり呼吸し、
-放置されると目を閉じて縁に沈みます。sub-agent は親の周りを回る小さな光として現れ、
-仕事を終えると粒子になって散ります。
+A desktop app for Windows and macOS that lets you watch local **Claude Code** and
+**Codex CLI** sessions as glowing creatures beneath a nighttime star chart.
 
-## 使い方
+Within each project's "tide pool," glowing session orbs drift slowly. Tool calls
+send ripples across the surface, thinking sessions breathe with a soft halo, and
+inactive sessions close their eyes and sink toward the edge. Sub-agents appear as
+smaller lights orbiting their parent and dissolve into particles when their work is done.
+
+## Usage
+
+Node.js 22.12 or later is required. To try Agentarium Space without installing an
+additional package manager, use the npm version bundled with Node.js.
+
+### npm (quick start)
 
 ```bash
-# pnpm 未導入なら: corepack enable pnpm （Node 22 同梱の corepack 経由）
-pnpm install
-pnpm start        # Electron アプリとして起動
-pnpm run web      # ブラウザで見る場合（表示された起動ごとの URL を開く）
-pnpm run scan     # 現在の状態を JSON で出力（デバッグ用）
+npm install
+npm start        # Launch the Electron app
+npm run web      # Open the per-launch URL printed to the terminal
+npm run scan     # Print the current state as JSON for debugging
+npm test         # Run the tests
 ```
 
-環境変数:
+### pnpm (use the lockfile)
 
-- `AGENTARIUM_PORT` — 待ち受けポート（デフォルト 41414）
-- `AGENTARIUM_WINDOW_MIN` — 表示対象とする活動ウィンドウ（分、デフォルト 60）
-- `AGENTARIUM_DEBUG` — 1 でパーサ等のデバッグログを stderr に出力
+This repository uses `pnpm-lock.yaml` to pin dependency versions.
 
-## 見かた
+```bash
+pnpm install --frozen-lockfile
+pnpm start        # Launch the Electron app
+pnpm run web      # Open the per-launch URL printed to the terminal
+pnpm run scan     # Print the current state as JSON for debugging
+pnpm test         # Run the tests
+```
 
-- **リング（潮だまり）** = プロジェクト。中央上にプロジェクト名と git ブランチ
-- **orb** = セッション。暖色 = Claude Code / 寒色 = Codex
-- **波紋 + 明るいコア + 上部ラベル** = ツール実行中（ラベルは実行中のツール名）
-- **ハローの呼吸** = 考え中 / **中輝度** = 入力待ち / **減光 + 目を閉じる** = アイドル
-- **周回する小さな光** = sub-agent（親の周りを回り、完了すると粒子バーストで消える。親との関係線上を光が流れていたら稼働中）
-- **ネームプレート** = 各 orb の下にセッション名と「いまやっていること」（ツール名: 対象・経過時間）。新しい発話は吹き出しでポップ
-- **ヘッダ HUD** = 現在時刻 / 状態別カウント / SYNC（最終受信からの経過）/ イベント毎分スパークライン / LINK 状態
-- **SECTOR 表記** = プロジェクトの潮だまり（`SECTOR-A ─ 名前 ─ N UNITS`）。左下には直近の行動が流れるコンソールフィード
-- orb をクリックすると計器パネル（エージェントツリー / ステータスタイムライン / cwd / ブランチ / ライブストリーム）。10 分超の長時間実行は `LONG RUN`、切断時は `LINK LOST` 表示
+Environment variables:
 
-## 仕組み
+- `AGENTARIUM_PORT` — listening port (default: 41414)
+- `AGENTARIUM_WINDOW_MIN` — activity window to display, in minutes (default: 60)
+- `AGENTARIUM_DEBUG` — set to 1 to print parser and other debug logs to stderr
 
-- `~/.claude/projects/**/*.jsonl` と `~/.codex/sessions/**/*.jsonl` を**読み取り専用**で tail し、
-  セッション状態を組み立てて WebSocket で UI に配信するだけ
-- 完全ローカル動作。外部へのネットワーク通信・telemetry は一切なし
-  （待ち受けは 127.0.0.1 のみ。起動ごとのランダムトークンと HTTP Host / WS Origin 検証つきで、
-  ブラウザ上の他サイトからのクロスオリジン読み取りも遮断）
-- ウィンドウ非表示中は描画を完全停止。`prefers-reduced-motion` 対応
+## Reading the display
 
-## ドキュメント
+- **Ring (tide pool)** = a project. The project name and Git branch appear at the top center
+- **Orb** = a session. Warm colors = Claude Code / cool colors = Codex
+- **Ripples + bright core** = a tool is running. Its name and target appear in the nameplate status line
+- **Breathing halo** = thinking / **medium glow** = waiting for input / **dimmed + closed eyes** = idle
+- **Orbiting smaller lights** = sub-agents. They orbit their parent and disappear in a particle burst when complete; a light traveling along the parent link indicates activity
+- **Nameplate** = the session name and current activity (tool name: target and elapsed time). New messages appear as leader-line callouts
+- **Header HUD** = current time / status counts / SYNC (time since the last update) / events-per-minute sparkline / LINK status
+- **SECTOR label** = a project's tide pool (`SECTOR-A ─ NAME ─ N UNITS`). The full-height LIVE STREAM module shows recent activity
+- Click an orb to open its instrument panel (agent tree / status timeline / cwd / branch / live stream). Runs longer than 10 minutes show `LONG RUN`; disconnections show `LINK LOST`
 
-- [DESIGN.md](./DESIGN.md) — 設計書（仕様の正典）
-- [PHILOSOPHY.md](./PHILOSOPHY.md) — デザイン思想（なぜこの見た目・挙動なのか。開発を引き継ぐ人 / AI エージェントはまずこちら）
-- [AGENTS.md](./AGENTS.md) — AI エージェント向けの最小ガイド
+## How it works
 
-## 注意
+- Tails `~/.claude/projects/**/*.jsonl` and `~/.codex/sessions/**/*.jsonl` in
+  **read-only** mode, builds session state, and sends it to the UI over WebSocket
+- Runs entirely locally, with no external network requests or telemetry
+  (listens only on 127.0.0.1; a random token is generated for each launch, and HTTP
+  Host / WebSocket Origin validation prevents cross-origin reads from other websites)
+- Stops rendering completely while the window is hidden and supports
+  `prefers-reduced-motion`
 
-- 本ツールは**非公式**です。Anthropic / OpenAI とは無関係で、各 CLI のログ形式（内部仕様）に
-  依存するため、CLI のバージョンアップで表示が壊れることがあります（未知の形式は無視して動き続けます）
-- 利用者自身が読み取り権限を持つセッションログだけを対象にしてください
-- `run_in_background` で起動された Claude Code の sub-agent は追跡できない場合があります（既知の限界）
-- コンテキスト使用率のうち Claude 分の窓サイズは、既定の 200000 トークンを用いた近似です
+## Documentation
 
-## 公開・サポート方針
+The following project documents are currently available in Japanese:
 
-このリポジトリは読み取り専用で運用し、Issues・Pull Requests・個別サポートを受け付けていません。
-セキュリティ上の問題は [SECURITY.md](./SECURITY.md) の非公開窓口から報告してください。
+- [DESIGN.md](./DESIGN.md) — canonical design specification
+- [PHILOSOPHY.md](./PHILOSOPHY.md) — design philosophy and rationale; start here when taking over development
+- [AGENTS.md](./AGENTS.md) — minimal guide for AI coding agents
+
+## Notes
+
+- This is an **unofficial** project and is not affiliated with Anthropic or OpenAI.
+  It depends on each CLI's internal log format, so CLI updates may break the display;
+  unknown formats are ignored so the app can keep running
+- Only use session logs that you are authorized to read
+- Claude Code sub-agents launched with `run_in_background` may not be trackable
+  (known limitation)
+- Claude context-window usage is approximated using a default window size of
+  200000 tokens
+
+## Repository and support policy
+
+This repository is maintained as read-only. Issues, pull requests, and individual
+support requests are not accepted. To report a security issue privately, follow
+[SECURITY.md](./SECURITY.md).
 
 ## License
 
