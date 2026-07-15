@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Agentarium Space</title>
+    <link rel="stylesheet" href="./office.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="header-identity">
+          <h1>AGENTARIUM SPACE</h1>
+          <time class="hud-clock" id="hud-clock" datetime="">--:--:--</time>
+        </div>
+        <div class="header-status" aria-label="稼働状況">
+          <div class="state-counts">
+            <p class="hud-count"><span class="state-dot status-tool"></span><span>Tool</span><strong id="status-count-tool">0</strong></p>
+            <p class="hud-count"><span class="state-dot status-thinking"></span><span>Thinking</span><strong id="status-count-thinking">0</strong></p>
+            <p class="hud-count"><span class="state-dot status-waiting"></span><span>Waiting</span><strong id="status-count-waiting">0</strong></p>
+            <p class="hud-count"><span class="state-dot status-idle"></span><span>Idle</span><strong id="status-count-idle">0</strong></p>
+          </div>
+          <p class="hud-sync" id="hud-sync"><span>Sync</span><strong id="sync-elapsed">—</strong></p>
+          <div class="hud-sparkline" aria-label="直近15分のイベント毎分推移">
+            <span>Events/min</span>
+            <canvas id="event-sparkline" width="80" height="24" aria-hidden="true"></canvas>
+          </div>
+          <p class="connection is-waiting" id="connection" role="status" aria-live="polite">
+            <span class="connection-dot" aria-hidden="true"></span>
+            <span id="connection-label">Link lost</span>
+          </p>
+          <p class="hud-total">Total out <strong id="hud-total-output">0</strong></p>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <aside class="detail-panel" id="detail-panel" aria-label="フォーカスとエージェントツリー">
+          <div class="module-stack">
+            <section class="console-module focus-module" aria-labelledby="focus-module-title">
+              <span class="module-corner corner-nw" aria-hidden="true"></span>
+              <span class="module-corner corner-ne" aria-hidden="true"></span>
+              <span class="module-corner corner-sw" aria-hidden="true"></span>
+              <span class="module-corner corner-se" aria-hidden="true"></span>
+              <header class="module-header">
+                <div class="module-header-title">
+                  <h2 id="focus-module-title">Focus</h2>
+                  <button class="focus-back" id="focus-back" type="button" aria-label="全体ビューへ戻る" hidden>← 全体</button>
+                </div>
+                <p class="eyebrow" id="panel-eyebrow">Operation overview</p>
+              </header>
+
+              <div class="module-scroll focus-body">
+                <p class="focus-title" id="detail-title">FLEET OVERVIEW</p>
+
+                <div class="overview-view" id="overview-view">
+                  <dl class="overview-stats">
+                    <div><dt>Sectors</dt><dd id="overview-sector-count">0</dd></div>
+                    <div><dt>Sessions</dt><dd id="overview-session-count">0</dd></div>
+                    <div><dt>Sub-agents</dt><dd id="overview-subagent-count">0</dd></div>
+                    <div><dt>Events / 15m</dt><dd id="overview-event-count">0</dd></div>
+                  </dl>
+                  <div class="status-breakdown" aria-label="セッション状態別内訳">
+                    <div class="status-breakdown-row">
+                      <span>Tool</span><strong id="overview-status-count-tool">0</strong>
+                      <span class="status-track" id="overview-status-bar-tool" role="progressbar" aria-label="Tool セッション比率" aria-valuemin="0"><span class="status-fill status-tool"></span></span>
+                    </div>
+                    <div class="status-breakdown-row">
+                      <span>Thinking</span><strong id="overview-status-count-thinking">0</strong>
+                      <span class="status-track" id="overview-status-bar-thinking" role="progressbar" aria-label="Thinking セッション比率" aria-valuemin="0"><span class="status-fill status-thinking"></span></span>
+                    </div>
+                    <div class="status-breakdown-row">
+                      <span>Waiting</span><strong id="overview-status-count-waiting">0</strong>
+                      <span class="status-track" id="overview-status-bar-waiting" role="progressbar" aria-label="Waiting セッション比率" aria-valuemin="0"><span class="status-fill status-waiting"></span></span>
+                    </div>
+                    <div class="status-breakdown-row">
+                      <span>Idle</span><strong id="overview-status-count-idle">0</strong>
+                      <span class="status-track" id="overview-status-bar-idle" role="progressbar" aria-label="Idle セッション比率" aria-valuemin="0"><span class="status-fill status-idle"></span></span>
+                    </div>
+                  </div>
+                  <section class="fleet-section" aria-labelledby="fleet-section-title">
+                    <h3 id="fleet-section-title">Fleet telemetry</h3>
+                    <dl class="fleet-stats">
+                      <div class="fleet-models">
+                        <dt>Models</dt>
+                        <dd id="overview-model-counts">—</dd>
+                      </div>
+                      <div>
+                        <dt>Write</dt>
+                        <dd class="access-write" id="overview-write-count">0</dd>
+                      </div>
+                      <div>
+                        <dt>Busiest sector</dt>
+                        <dd id="overview-busiest-sector">—</dd>
+                      </div>
+                      <div>
+                        <dt>Total out</dt>
+                        <dd id="overview-total-output">0</dd>
+                      </div>
+                      <div>
+                        <dt>Tool calls</dt>
+                        <dd id="overview-tool-calls">0</dd>
+                      </div>
+                    </dl>
+                  </section>
+                </div>
+
+                <div class="session-view" id="session-view" hidden>
+                  <div class="detail-status-row">
+                    <span class="status-badge" id="detail-status">—</span>
+                    <span class="long-run-alert" id="detail-long-run">Long run</span>
+                  </div>
+
+                  <dl class="detail-list instrument-grid">
+                    <div>
+                      <dt>Source</dt>
+                      <dd class="source-value" id="detail-source">—</dd>
+                    </div>
+                    <div>
+                      <dt>Branch</dt>
+                      <dd id="detail-branch">—</dd>
+                    </div>
+                    <div>
+                      <dt>Cwd</dt>
+                      <dd id="detail-cwd">—</dd>
+                    </div>
+                    <div>
+                      <dt>Last signal</dt>
+                      <dd id="detail-last-signal">—</dd>
+                    </div>
+                    <div>
+                      <dt>Model</dt>
+                      <dd id="detail-model">—</dd>
+                    </div>
+                    <div>
+                      <dt>Access</dt>
+                      <dd id="detail-access">—</dd>
+                    </div>
+                    <div>
+                      <dt>Approval</dt>
+                      <dd id="detail-approval">—</dd>
+                    </div>
+                    <div>
+                      <dt>Origin</dt>
+                      <dd id="detail-origin">—</dd>
+                    </div>
+                    <div>
+                      <dt>Uptime</dt>
+                      <dd id="detail-uptime">—</dd>
+                    </div>
+                    <div>
+                      <dt>Out tokens</dt>
+                      <dd id="detail-output-tokens">—</dd>
+                    </div>
+                    <div class="instrument-wide">
+                      <dt>Top tools</dt>
+                      <dd id="detail-top-tools">—</dd>
+                    </div>
+                  </dl>
+
+                  <section class="panel-section timeline-section">
+                    <h3>Status timeline</h3>
+                    <div class="status-timeline" id="detail-timeline" role="img" aria-label="直近30分の状態履歴"></div>
+                  </section>
+                </div>
+              </div>
+            </section>
+
+            <section class="console-module agent-tree-module" aria-labelledby="agent-tree-module-title">
+              <span class="module-corner corner-nw" aria-hidden="true"></span>
+              <span class="module-corner corner-ne" aria-hidden="true"></span>
+              <span class="module-corner corner-sw" aria-hidden="true"></span>
+              <span class="module-corner corner-se" aria-hidden="true"></span>
+              <header class="module-header">
+                <h2 id="agent-tree-module-title">Agent tree</h2>
+              </header>
+              <div class="module-scroll tree-scroll">
+                <div id="overview-tree-view">
+                  <ul class="overview-tree" id="overview-agents"></ul>
+                </div>
+                <div id="session-tree-view" hidden>
+                  <ul class="agent-tree" id="detail-agents"></ul>
+                </div>
+              </div>
+            </section>
+          </div>
+        </aside>
+
+        <section class="canvas-region" id="canvas-region" aria-label="Agentarium Space canvas">
+          <canvas id="bay-canvas" class="bay-canvas" aria-hidden="true"></canvas>
+          <main>
+            <ul class="visually-hidden" id="session-list" aria-label="稼働セッション"></ul>
+          </main>
+        </section>
+
+        <aside class="stream-panel" aria-label="ライブストリーム">
+          <section class="console-module live-stream-module" aria-labelledby="live-stream-module-title">
+            <span class="module-corner corner-nw" aria-hidden="true"></span>
+            <span class="module-corner corner-ne" aria-hidden="true"></span>
+            <span class="module-corner corner-sw" aria-hidden="true"></span>
+            <span class="module-corner corner-se" aria-hidden="true"></span>
+            <header class="module-header">
+              <h2 id="live-stream-module-title">Live stream</h2>
+            </header>
+            <div class="module-scroll stream-scroll">
+              <div id="overview-stream-view">
+                <ol class="event-list" id="overview-events"></ol>
+              </div>
+              <div id="session-stream-view" hidden>
+                <ol class="event-list" id="detail-events"></ol>
+              </div>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </div>
+
+    <script type="module" src="./office.js"></script>
+  </body>
+</html>
