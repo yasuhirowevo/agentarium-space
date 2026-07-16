@@ -10,10 +10,37 @@
 放置されると目を閉じて縁に沈みます。sub-agent は親の周りを回る小さな光として現れ、
 仕事を終えると粒子になって散ります。
 
-## 使い方
+## macOS へのインストール
 
-Node.js 22.12 以降が必要です。追加のパッケージマネージャーを用意せずに試す場合は、
-Node.js に同梱されている npm を使えます。
+ビルド済み配布版は macOS 12 Monterey 以降の Apple シリコンと Intel Mac に対応します。
+Electron を同梱しているため Node.js は不要です。最初のリリースと Homebrew Tap の更新が
+公開された後は、次のコマンドでインストールできます。
+
+```bash
+brew install --cask yasuhirowevo/tap/agentarium-space
+open -a "Agentarium Space"
+```
+
+Homebrew Cask での配布に Apple Developer Program は不要です。任意の Developer ID 署名・公証を
+行っていないリリースは、無料の ad-hoc 署名だけで配布されます。`brew install` は完了しますが、
+初回起動時に macOS の Gatekeeper がアプリを止める場合があります。公式リリースから取得したことを
+確認したうえで一度起動し、**システム設定 → プライバシーとセキュリティ → このまま開く**を選んでください。
+詳しくは [Apple の案内](https://support.apple.com/102445)を参照してください。Cask が quarantine を
+自動解除することはありません。
+
+以後のリリースへ更新する場合:
+
+```bash
+brew upgrade --cask yasuhirowevo/tap/agentarium-space
+```
+
+ビルド済みアプリの配布は現在 macOS のみです。Windows では、以下の開発手順に従って
+ソースから実行できます。
+
+## ソースからの開発・実行
+
+Node.js 22.12 以降が必要です。再現可能な開発環境には lockfile を使う pnpm を推奨します。
+追加のパッケージマネージャーを用意せずに試す場合は、Node.js に同梱されている npm を使えます。
 
 ### npm（手軽に試す）
 
@@ -59,9 +86,10 @@ pnpm test         # テストを実行
 
 - `~/.claude/projects/**/*.jsonl` と `~/.codex/sessions/**/*.jsonl` を**読み取り専用**で tail し、
   セッション状態を組み立てて WebSocket で UI に配信するだけ
-- 完全ローカル動作。外部へのネットワーク通信・telemetry は一切なし
-  （待ち受けは 127.0.0.1 のみ。起動ごとのランダムトークンと HTTP Host / WS Origin 検証つきで、
-  ブラウザ上の他サイトからのクロスオリジン読み取りも遮断）
+- 起動後のアプリは完全にローカルで動作します。待ち受けは 127.0.0.1 のみで、外部への通信や
+  telemetry 送信は行いません。Homebrew によるインストール・更新時にはネットワークを使用しますが、
+  アプリ自身に自動更新機能はありません。起動ごとのランダムトークンと HTTP Host / WS Origin
+  検証により、ブラウザ上の他サイトからのクロスオリジン読み取りも遮断します
 - ウィンドウ非表示中は描画を完全停止。`prefers-reduced-motion` 対応
 
 ## 注意

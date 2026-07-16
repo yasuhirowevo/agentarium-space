@@ -1,0 +1,421 @@
+name: Release macOS
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-macos-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22.21.1"
+  PNPM_VERSION: "11.12.0"
+
+jobs:
+  preflight:
+    name: Preflight and test
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      signing_enabled: ${{ steps.release.outputs.signing_enabled }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Validate release prerequisites
+        id: release
+        shell: bash
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main
+          release_commit="$(git rev-parse HEAD)"
+          git merge-base --is-ancestor \
+            "$release_commit" refs/remotes/origin/main
+
+          version="$(node -p "require('./package.json').version")"
+          if [[ "$GITHUB_REF_NAME" != "v${version}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package version ${version}" >&2
+            exit 1
+          fi
+
+          if [[ -z "${HOMEBREW_TAP_TOKEN:-}" ]]; then
+            echo "Missing required secret: HOMEBREW_TAP_TOKEN" >&2
+            exit 1
+          fi
+
+          signing_secrets=(
+            MAC_CSC_LINK
+            MAC_CSC_KEY_PASSWORD
+            APPLE_API_KEY_BASE64
+            APPLE_API_KEY_ID
+            APPLE_API_ISSUER
+          )
+          configured_signing_secrets=0
+          missing_signing_secrets=()
+          for name in "${signing_secrets[@]}"; do
+            if [[ -n "${!name:-}" ]]; then
+              configured_signing_secrets=$((configured_signing_secrets + 1))
+            else
+              missing_signing_secrets+=("$name")
+            fi
+          done
+
+          if (( configured_signing_secrets == 0 )); then
+            signing_enabled=false
+          elif (( configured_signing_secrets == ${#signing_secrets[@]} )); then
+            signing_enabled=true
+          else
+            echo "Optional Apple signing must be configured with all secrets or none." >&2
+            printf 'Missing optional signing secret: %s\n' "${missing_signing_secrets[@]}" >&2
+            exit 1
+          fi
+
+          zero_sha="$(printf '%064d' 0)"
+          node scripts/render-homebrew-cask.mjs \
+            --version "$version" \
+            --arm64-sha256 "$zero_sha" \
+            --x64-sha256 "$zero_sha" \
+            --output "$RUNNER_TEMP/agentarium-space.rb"
+
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'signing_enabled=%s\n' "$signing_enabled" >> "$GITHUB_OUTPUT"
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm run scan
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: preflight
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Prepare notarization key
+        if: needs.preflight.outputs.signing_enabled == 'true'
+        shell: bash
+        env:
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          key_file="$RUNNER_TEMP/agentarium-notary-key.p8"
+          umask 077
+          printf '%s' "$APPLE_API_KEY_BASE64" | base64 -D > "$key_file"
+          grep -q -- "BEGIN PRIVATE KEY" "$key_file"
+          printf 'APPLE_API_KEY=%s\n' "$key_file" >> "$GITHUB_ENV"
+
+      - name: Build Developer ID unsigned release
+        if: needs.preflight.outputs.signing_enabled != 'true'
+        run: pnpm run dist:mac --${{ matrix.arch }}
+
+      - name: Build, sign, notarize, and staple
+        if: needs.preflight.outputs.signing_enabled == 'true'
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: pnpm run dist:mac:signed --${{ matrix.arch }}
+
+      - name: Verify release ZIP
+        shell: bash
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          SIGNING_ENABLED: ${{ needs.preflight.outputs.signing_enabled }}
+        run: |
+          set -euo pipefail
+
+          archive="dist/agentarium-space-${VERSION}-macos-${ARCH}.zip"
+          unpack_dir="$RUNNER_TEMP/agentarium-${ARCH}"
+          app="$unpack_dir/Agentarium Space.app"
+
+          test -f "$archive"
+          mkdir -p "$unpack_dir"
+          ditto -x -k "$archive" "$unpack_dir"
+
+          entry_count="$(
+            find "$unpack_dir" -mindepth 1 -maxdepth 1 -print |
+              wc -l |
+              tr -d '[:space:]'
+          )"
+          test "$entry_count" = "1"
+          test -d "$app"
+
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign_output="$(codesign -dv --verbose=4 "$app" 2>&1)"
+          printf '%s\n' "$codesign_output"
+          if [[ "$SIGNING_ENABLED" == "true" ]]; then
+            printf '%s\n' "$codesign_output" |
+              grep -Fq "Authority=Developer ID Application:"
+            xcrun stapler validate "$app"
+            spctl --assess --type execute --verbose=4 "$app"
+          else
+            printf '%s\n' "$codesign_output" | grep -Fq "Signature=adhoc"
+          fi
+          pnpm run smoke:package "$app" "$ARCH"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-${{ matrix.arch }}
+          path: dist/agentarium-space-${{ needs.preflight.outputs.version }}-macos-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Remove notarization key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/agentarium-notary-key.p8"
+
+  publish-release:
+    name: Publish GitHub Release
+    needs:
+      - preflight
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      arm64_sha256: ${{ steps.checksums.outputs.arm64_sha256 }}
+      x64_sha256: ${{ steps.checksums.outputs.x64_sha256 }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: macos-*
+          path: release
+          merge-multiple: true
+
+      - name: Verify assets and calculate checksums
+        id: checksums
+        shell: bash
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          arm64="release/agentarium-space-${VERSION}-macos-arm64.zip"
+          x64="release/agentarium-space-${VERSION}-macos-x64.zip"
+          test -f "$arm64"
+          test -f "$x64"
+
+          file_count="$(
+            find release -maxdepth 1 -type f -print |
+              wc -l |
+              tr -d '[:space:]'
+          )"
+          test "$file_count" = "2"
+
+          arm64_sha256="$(sha256sum "$arm64" | awk '{print $1}')"
+          x64_sha256="$(sha256sum "$x64" | awk '{print $1}')"
+          printf 'arm64_sha256=%s\n' "$arm64_sha256" >> "$GITHUB_OUTPUT"
+          printf 'x64_sha256=%s\n' "$x64_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Create and publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists" >&2
+            exit 1
+          fi
+
+          gh release create "$GITHUB_REF_NAME" \
+            "release/agentarium-space-${VERSION}-macos-arm64.zip" \
+            "release/agentarium-space-${VERSION}-macos-x64.zip" \
+            --draft \
+            --verify-tag \
+            --generate-notes \
+            --title "Agentarium Space ${VERSION}"
+          gh release edit "$GITHUB_REF_NAME" --draft=false
+
+  update-tap:
+    name: Open Homebrew Tap PR
+    needs:
+      - preflight
+      - publish-release
+    runs-on: macos-15
+    env:
+      HOMEBREW_NO_ANALYTICS: "1"
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: source
+
+      - uses: actions/checkout@v7
+        with:
+          repository: yasuhirowevo/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Prepare Tap branch
+        id: tap-branch
+        shell: bash
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          branch="agentarium-space-v${VERSION}"
+          if git -C tap ls-remote --exit-code origin "refs/heads/${branch}"; then
+            git -C tap fetch origin "$branch"
+            git -C tap checkout -B "$branch" FETCH_HEAD
+          else
+            git -C tap checkout -b "$branch"
+          fi
+          git -C tap config user.name "github-actions[bot]"
+          git -C tap config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+          printf 'branch=%s\n' "$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Render Cask
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          ARM64_SHA256: ${{ needs.publish-release.outputs.arm64_sha256 }}
+          X64_SHA256: ${{ needs.publish-release.outputs.x64_sha256 }}
+        run: |
+          node source/scripts/render-homebrew-cask.mjs \
+            --version "$VERSION" \
+            --arm64-sha256 "$ARM64_SHA256" \
+            --x64-sha256 "$X64_SHA256" \
+            --output tap/Casks/agentarium-space.rb
+
+      - name: Commit Tap change
+        shell: bash
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          git -C tap add Casks/agentarium-space.rb
+          if ! git -C tap diff --cached --quiet; then
+            git -C tap commit -m "agentarium-space ${VERSION}"
+          fi
+
+      - name: Audit Cask and verify both downloads
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          brew untap yasuhirowevo/tap >/dev/null 2>&1 || true
+          brew tap yasuhirowevo/tap "file://${GITHUB_WORKSPACE}/tap"
+          brew trust --tap yasuhirowevo/tap
+          brew style --cask yasuhirowevo/tap/agentarium-space
+          brew audit \
+            --strict \
+            --online \
+            --cask \
+            --os=all \
+            --arch=all \
+            yasuhirowevo/tap/agentarium-space
+          brew readall --os=all --arch=all yasuhirowevo/tap
+          brew fetch \
+            --cask \
+            --force \
+            --retry \
+            --all-platforms \
+            yasuhirowevo/tap/agentarium-space
+
+      - name: Push Tap branch and open Draft PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          ARM64_SHA256: ${{ needs.publish-release.outputs.arm64_sha256 }}
+          X64_SHA256: ${{ needs.publish-release.outputs.x64_sha256 }}
+          BRANCH: ${{ steps.tap-branch.outputs.branch }}
+        run: |
+          set -euo pipefail
+
+          git -C tap push --set-upstream origin "$BRANCH"
+          printf '%s\n' \
+            "Updates Agentarium Space to ${VERSION}." \
+            "" \
+            "- Release: https://github.com/yasuhirowevo/agentarium-space/releases/tag/v${VERSION}" \
+            "- arm64 SHA-256: \`${ARM64_SHA256}\`" \
+            "- x64 SHA-256: \`${X64_SHA256}\`" \
+            > "$RUNNER_TEMP/tap-pr-body.md"
+
+          existing_pr="$(
+            gh pr list \
+              --repo yasuhirowevo/homebrew-tap \
+              --state open \
+              --head "$BRANCH" \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+          if [[ -n "$existing_pr" ]]; then
+            gh pr view "$existing_pr" \
+              --repo yasuhirowevo/homebrew-tap \
+              --json url \
+              --jq .url
+          else
+            gh pr create \
+              --repo yasuhirowevo/homebrew-tap \
+              --base main \
+              --head "$BRANCH" \
+              --draft \
+              --title "agentarium-space ${VERSION}" \
+              --body-file "$RUNNER_TEMP/tap-pr-body.md"
+          fi
