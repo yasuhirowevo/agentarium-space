@@ -167,6 +167,7 @@ function createHttpHandler(uiRoot, accessToken) {
   };
 }
 
+/** @param {{ port?: number, uiRoot?: string, claudeRoot?: string, codexRoot?: string }} [options] */
 export async function startServer({
   port = requestedPort(process.env.AGENTARIUM_PORT ?? DEFAULT_PORT),
   uiRoot = defaultUiRoot,
@@ -242,7 +243,7 @@ export async function startServer({
       server.once('error', reject);
       server.listen(port, HOST, () => {
         server.off('error', reject);
-        resolve();
+        resolve(undefined);
       });
     });
   } catch (error) {
@@ -263,7 +264,7 @@ export async function startServer({
     await Promise.allSettled([claude.close(), codex.close()]);
     for (const client of wss.clients) client.terminate();
     await new Promise((resolve) => wss.close(resolve));
-    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve(undefined)));
   }
 
   return {

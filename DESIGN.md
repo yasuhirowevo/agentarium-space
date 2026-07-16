@@ -4,6 +4,24 @@
 セッションと sub-agent を「星図の下で発光する生き物たちの生態系」として鳥瞰表示するデスクトップアプリ。
 本書は**仕様の正典**。デザイン判断の「なぜ」と拡張時の判断基準は [PHILOSOPHY.md](./PHILOSOPHY.md) を参照。
 
+## スタンドアロン配布（v2.15）
+
+- スタンドアロン成果物は Electron 本体・アプリコード・実行時依存を内包し、配布先での
+  Node.js / npm / pnpm のインストールを不要とする。ログの参照先と loopback server の
+  セキュリティ制約は開発時起動と同一とする
+- パッケージングには `electron-builder` を使い、アプリコードは `app.asar` に収録する。
+  収録対象は `electron/`、`src/`、`ui/`、`package.json`、`LICENSE`、および production dependencies に
+  限定し、テスト・設計文書・作業記録・生成物を含めない
+- `pnpm run build` は現在の OS / CPU 向けの展開済みアプリを `dist/` に生成する。
+  `pnpm run dist` は現在の OS 向け配布物を生成し、macOS は DMG と ZIP、Windows は
+  インストール不要の portable EXE を対象とする。各 OS 向け成果物は原則として対象 OS 上でビルドする
+- app ID は `io.github.yasuhirowevo.agentarium-space`、表示名は `Agentarium Space` とする。
+  `dist/`、`node_modules/`、`note/` はソース管理対象外とする
+- macOS のコード署名は `identity: null` で無効化し、証明書を自動検出しない。notarization・
+  自動更新・成果物の公開は本節の対象外とする
+- パッケージ後の検証では、アプリが token 付き loopback URL を表示できること、UI 資産を
+  app.asar から配信できること、終了時に watcher と server を閉じることを確認する
+
 ## 公開識別とローカル接続認証（v2.14 — Agentarium Space）
 
 - 公開上のプロダクト名は **Agentarium Space**、リポジトリ・package slug は
@@ -34,9 +52,9 @@
 
 ## 技術スタック
 
-- Node.js 22+ / plain JavaScript (ESM, `"type": "module"`) / ビルドステップなし・フレームワークなし
+- Node.js 22+ / plain JavaScript (ESM, `"type": "module"`) / UI の変換ビルドなし・フレームワークなし
 - dependencies: `chokidar`（ファイル監視）, `ws`（WebSocket）
-- devDependencies: `electron`
+- devDependencies: `electron`, `electron-builder`, `prettier`, `typescript`, `@types/ws`
 - UI: 素の HTML/CSS/JS + inline SVG
 
 ## プロセス構成
@@ -52,6 +70,8 @@
 
 - PORT: 環境変数 `AGENTARIUM_PORT`、デフォルト `41414`
 - `pnpm run scan`: watch せず一回だけスキャンして状態 JSON を stdout 出力（検証用 CLI）
+- `pnpm run build`: 現在の OS / CPU 向け展開済み Electron アプリを `dist/` に生成
+- `pnpm run dist`: macOS は DMG/ZIP、Windows は portable EXE を `dist/` に生成
 
 ## ディレクトリ構成
 
@@ -70,6 +90,7 @@ agentarium-space/
     index.html
     office.js             WS 受信 → オフィス描画
     office.css
+  dist/                   スタンドアロン成果物（gitignore）
 ```
 
 ## データソース仕様（2026-07-12 実機確認済み）
@@ -545,13 +566,16 @@ startedAt は toPublicSession で公開済み）:
 - `src/server.js` の起動関数を import → listen 完了後に `BrowserWindow`（1280x800, 背景ダーク）で token 付き loopback URL をロード
 - `webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }`。preload なし（データは WS 経由のみ）
 - 全ウィンドウクローズで app.quit()（mac の再活性化定型は入れてよい）
+- パッケージ後も main process 内で同じ server を起動し、UI は app.asar 内の `ui/` から配信する
 
 ## 検証手段
 
 - `pnpm run scan` → 現在の実ログから組んだ状態 JSON を stdout に出す
 - `pnpm run web` → stdout に表示された token 付き URL をブラウザで開いて UI 確認
 - `pnpm start` → Electron 起動確認
+- `pnpm run build` → 展開済みアプリを生成し、起動・UI 資産配信・終了処理を確認
+- `pnpm run dist` → 対象 OS の配布用成果物が `dist/` に生成されることを確認
 
 ## v1 スコープ外（実装しない）
 
-- パッケージング（electron-builder）/ 通知 / 許可待ち（permission prompt）検知 / トークン・コスト集計 / 履歴タイムライン / 設定画面
+- 通知 / 許可待ち（permission prompt）検知 / トークン・コスト集計 / 履歴タイムライン / 設定画面 / 自動更新 / 成果物の公開

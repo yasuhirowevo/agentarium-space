@@ -37,6 +37,22 @@ pnpm run scan     # Print the current state as JSON for debugging
 pnpm test         # Run the tests
 ```
 
+## Build a standalone app
+
+The build machine needs Node.js and pnpm, but the generated app runs without
+Node.js, npm, or pnpm installed on the target machine.
+
+```bash
+pnpm install --frozen-lockfile
+pnpm run build     # Create an unpacked app for the current OS and CPU in dist/
+pnpm run dist      # Create distributable artifacts for the current OS in dist/
+```
+
+The distribution build creates DMG and ZIP artifacts on macOS and a no-install
+portable EXE on Windows. Build each platform's artifacts on that platform. The
+macOS build is neither signed nor notarized, so it may trigger a Gatekeeper
+warning.
+
 Environment variables:
 
 - `AGENTARIUM_PORT` — listening port (default: 41414)

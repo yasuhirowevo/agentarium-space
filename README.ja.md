@@ -37,6 +37,21 @@ pnpm run scan     # 現在の状態を JSON で出力（デバッグ用）
 pnpm test         # テストを実行
 ```
 
+## スタンドアロン版をビルド
+
+ビルド環境には Node.js と pnpm が必要ですが、生成したアプリは Node.js / npm / pnpm を
+インストールしていない環境でも起動できます。
+
+```bash
+pnpm install --frozen-lockfile
+pnpm run build     # 現在の OS / CPU 向け展開済みアプリを dist/ に生成
+pnpm run dist      # 現在の OS 向け配布物を dist/ に生成
+```
+
+macOS では DMG と ZIP、Windows ではインストール不要の portable EXE を生成します。
+各 OS 向け成果物は、その OS 上でビルドしてください。macOS 版は署名・notarization を行わないため、
+Gatekeeper の警告対象になる場合があります。
+
 環境変数:
 
 - `AGENTARIUM_PORT` — 待ち受けポート（デフォルト 41414）

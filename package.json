@@ -3,6 +3,7 @@
   "productName": "Agentarium Space",
   "version": "0.1.0",
   "description": "Agentarium Space, a local-only visualizer for Claude Code / Codex CLI sessions",
+  "author": "yasuhirowevo",
   "type": "module",
   "main": "electron/main.js",
   "private": true,
@@ -11,14 +12,50 @@
     "start": "electron .",
     "web": "node src/server.js",
     "scan": "node src/scan.js",
-    "test": "node --test"
+    "test": "node --test",
+    "build": "electron-builder --dir",
+    "dist": "electron-builder",
+    "format": "prettier --write package.json pnpm-workspace.yaml jsconfig.json README.md README.ja.md",
+    "format:check": "prettier --check package.json pnpm-workspace.yaml jsconfig.json README.md README.ja.md",
+    "type-check": "tsc --project jsconfig.json"
   },
   "dependencies": {
     "chokidar": "^5.0.0",
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "electron": "^43.1.1"
+    "@types/ws": "^8.18.1",
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3",
+    "prettier": "^3.9.5",
+    "typescript": "^7.0.2"
+  },
+  "build": {
+    "appId": "io.github.yasuhirowevo.agentarium-space",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "ui/**/*",
+      "package.json",
+      "LICENSE"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "identity": null,
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "portable"
+      ]
+    }
   },
   "packageManager": "pnpm@11.12.0+sha512.820a6fbd0d9f04c226638002aead1e45340a9139dd5dc077c1d83ef44aa2481c8eb6637b4c9aa696a3c7e35ba818e49cf27213e5f2b91138d09b7a3e26e898ba"
 }
