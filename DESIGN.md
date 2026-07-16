@@ -25,6 +25,36 @@
 - 回帰検証は `node:test` で行い、HTTP 資産・WS snapshot の成功系に加えて token 無し／誤 token、
   外部 Host／Origin、パストラバーサル、再起動後の旧 token を拒否することを確認する
 
+## macOS 配布と Homebrew Cask（v2.15 — Homebrew Cask 配布）
+
+- macOS 版は Electron ランタイムを同梱した `Agentarium Space.app` として配布する。利用者側の
+  Node.js / npm / pnpm は不要とし、ソースを利用者環境で組み立てる Formula は提供しない。
+  対象は macOS 12 Monterey 以降の arm64 / x64 とし、Windows の配布成果物は v2.15 の対象外とする
+- GitHub Release のタグは `package.json` の version と一致する `v<version>` とし、成果物は
+  `agentarium-space-<version>-macos-arm64.zip` と
+  `agentarium-space-<version>-macos-x64.zip` の 2 つを正典とする。zip 直下には
+  `Agentarium Space.app` だけを置く。DMG は直接ダウンロード用の副成果物として同時生成してよい
+- Homebrew Cask / Tap と Developer ID 未署名アプリのビルド・配布には Apple Developer Program を
+  必要条件としない。標準のリリース処理は無料の ad-hoc 署名だけを施した zip を生成し、
+  GitHub Release と Cask から配布できること。ad-hoc 署名は Apple Silicon の実行要件を満たすためのもので、
+  Developer ID による配布元の証明や Gatekeeper の警告回避にはならない
+- Developer ID Application による署名と Apple notarization / staple は任意の追加設定とする。必要な資格情報が
+  一式そろっている場合だけ署名済みリリースを生成し、一部だけ設定されている場合は曖昧な成果物を作らず失敗させる
+- Developer ID 未署名アプリは `brew install` できるが、macOS の Gatekeeper により初回起動が止められる場合がある。
+  その場合の公式な「このまま開く」手順を README に示す。Cask やアプリから quarantine を自動解除しない
+- ローカル検証用には ad-hoc 署名の unpacked app を `dist/` 配下へ生成できる。公開用 zip も同じコードと
+  パッケージ設定から生成し、公開前に packaged smoke test を通す
+- 配布アイコンは UI に登場する寒色の orb 1 体だけを高解像度化して使う。文字・ロゴ・星図・
+  セッション名・ローカルパスなど、キャラクター以外の画面要素は含めない
+- Homebrew は `yasuhirowevo/homebrew-tap` の Cask `agentarium-space` から提供し、正式な導入コマンドを
+  `brew install --cask yasuhirowevo/tap/agentarium-space` とする。Cask は CPU architecture ごとの
+  zip と SHA-256 を固定し、`Agentarium Space.app` を `/Applications` へ配置する
+- リリース処理はテスト → arm64 / x64 ビルド → （設定済みの場合のみ署名・notarization）→
+  GitHub Release 公開 → Cask 更新 PR 作成の順に行う。Tap の `main` へ直接 push せず、
+  version・URL・両 checksum をレビューできる PR を経由する
+- 自動更新通信は追加しない。更新は GitHub Release と `brew upgrade` に委ね、実行時の
+  127.0.0.1 限定・外部送信ゼロ・ログ読み取り専用という既存契約を変えない
+
 ## 原則
 
 - **読み取り専用**: ログファイルへの書き込み・改変・削除は一切しない
@@ -34,9 +64,9 @@
 
 ## 技術スタック
 
-- Node.js 22+ / plain JavaScript (ESM, `"type": "module"`) / ビルドステップなし・フレームワークなし
+- Node.js 22+ / plain JavaScript (ESM, `"type": "module"`) / UI のトランスパイルなし・フレームワークなし
 - dependencies: `chokidar`（ファイル監視）, `ws`（WebSocket）
-- devDependencies: `electron`
+- devDependencies: `electron`, `electron-builder`（macOS 配布パッケージ生成のみ）
 - UI: 素の HTML/CSS/JS + inline SVG
 
 ## プロセス構成
@@ -58,7 +88,11 @@
 ```
 agentarium-space/
   package.json
+  electron-builder.yml   macOS app / zip の配布設定
+  build/                 アイコンと任意署名で使う最小限の entitlement
   electron/main.js        Electron エントリ（BrowserWindow, contextIsolation:true, nodeIntegration:false, sandbox:true, preload なし）
+  electron/network-policy.js  Renderer の通信先を起動中の loopback server に限定する純粋関数
+  scripts/                packaged app の smoke test と Homebrew Cask 生成
   src/
     server.js             起動エントリ: watchers 起動 + HTTP/WS 配信
     state.js              セッション状態モデル（純粋関数中心・watchers から独立してテスト可能）
@@ -544,14 +578,24 @@ startedAt は toPublicSession で公開済み）:
 
 - `src/server.js` の起動関数を import → listen 完了後に `BrowserWindow`（1280x800, 背景ダーク）で token 付き loopback URL をロード
 - `webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }`。preload なし（データは WS 経由のみ）
+- Renderer の通信は `defaultSession.webRequest` で、起動した Agentarium server と同じ
+  `127.0.0.1:<port>` の HTTP / WebSocket だけを許可する。macOS の `Info.plist` も
+  `NSAllowsArbitraryLoads=false` とし、カメラ・マイク・音声・Bluetooth の usage description を含めない
 - 全ウィンドウクローズで app.quit()（mac の再活性化定型は入れてよい）
+- 初期画面の load 完了後に、URL やセッション内容を含まない readiness 行を stdout へ出す。packaged smoke は
+  空の一時 HOME で通常起動し、この行とプロセス継続を確認する
 
 ## 検証手段
 
 - `pnpm run scan` → 現在の実ログから組んだ状態 JSON を stdout に出す
 - `pnpm run web` → stdout に表示された token 付き URL をブラウザで開いて UI 確認
 - `pnpm start` → Electron 起動確認
+- `pnpm run package:mac --arm64` → Developer ID 未署名・ad-hoc 署名のローカル検証用 app を生成
+- `pnpm run dist:mac --arm64` → Homebrew Cask で配布可能な Developer ID 未署名・ad-hoc 署名 zip を生成
+- `pnpm run dist:mac:signed --arm64` → 資格情報がある場合だけ署名・notarization 済み zip を生成
+- `pnpm run smoke:package "dist/mac-arm64/Agentarium Space.app" arm64` → ASAR 内の server / UI / 依存解決と
+  bundle identifier・最低 OS・実行 architecture を確認
 
 ## v1 スコープ外（実装しない）
 
-- パッケージング（electron-builder）/ 通知 / 許可待ち（permission prompt）検知 / トークン・コスト集計 / 履歴タイムライン / 設定画面
+- 通知 / 許可待ち（permission prompt）検知 / トークン・コスト集計 / 履歴タイムライン / 設定画面

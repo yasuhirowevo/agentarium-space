@@ -1,5 +1,6 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, session } from 'electron';
 import { startServer } from '../src/server.js';
+import { isAllowedRendererRequest } from './network-policy.js';
 
 let serverHandle = null;
 let mainWindow = null;
@@ -23,6 +24,12 @@ async function createWindow() {
   });
   await mainWindow.loadURL(serverHandle.url);
   return mainWindow;
+}
+
+function installNetworkGuard(serverUrl) {
+  session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+    callback({ cancel: !isAllowedRendererRequest(details.url, serverUrl) });
+  });
 }
 
 async function shutdown() {
@@ -50,7 +57,9 @@ app.on('window-all-closed', () => app.quit());
 app.whenReady()
   .then(async () => {
     serverHandle = await startServer();
+    installNetworkGuard(serverHandle.url);
     await createWindow();
+    console.log('Agentarium Space window ready');
   })
   .catch((error) => {
     console.error('Agentarium Space failed to launch:', error);

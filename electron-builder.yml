@@ -1,0 +1,42 @@
+appId: io.github.yasuhirowevo.agentarium-space
+productName: Agentarium Space
+asar: true
+afterPack: ./scripts/after-pack-macos.mjs
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - electron/**/*
+  - src/**/*
+  - ui/**/*
+  - package.json
+
+extraResources:
+  - from: LICENSE
+    to: LICENSE
+
+mac:
+  icon: build/icon.png
+  category: public.app-category.developer-tools
+  minimumSystemVersion: "12.0"
+  extendInfo:
+    NSAppTransportSecurity:
+      NSAllowsArbitraryLoads: false
+    NSAudioCaptureUsageDescription: null
+    NSBluetoothAlwaysUsageDescription: null
+    NSBluetoothPeripheralUsageDescription: null
+    NSCameraUsageDescription: null
+    NSMicrophoneUsageDescription: null
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  forceCodeSigning: false
+  notarize: false
+  target:
+    - target: zip
+      arch:
+        - arm64
+        - x64
+  artifactName: agentarium-space-${version}-macos-${arch}.${ext}

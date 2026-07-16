@@ -10,10 +10,39 @@ send ripples across the surface, thinking sessions breathe with a soft halo, and
 inactive sessions close their eyes and sink toward the edge. Sub-agents appear as
 smaller lights orbiting their parent and dissolve into particles when their work is done.
 
-## Usage
+## Install on macOS
 
-Node.js 22.12 or later is required. To try Agentarium Space without installing an
-additional package manager, use the npm version bundled with Node.js.
+Prebuilt releases support macOS 12 Monterey or later on Apple silicon and
+Intel Macs. Electron is included, so Node.js is not required. Once the first
+release and Homebrew tap update are published, install with:
+
+```bash
+brew install --cask yasuhirowevo/tap/agentarium-space
+open -a "Agentarium Space"
+```
+
+Homebrew Cask distribution does not require the Apple Developer Program.
+Releases without the optional Developer ID signing and notarization use only
+free ad-hoc signing. `brew install` still completes, but macOS Gatekeeper may
+block the first launch. After verifying that the app came from the official
+release, try opening it once, then choose **System Settings > Privacy & Security
+> Open Anyway**. See [Apple's instructions](https://support.apple.com/102445).
+The Cask never removes macOS quarantine automatically.
+
+Upgrade later releases with:
+
+```bash
+brew upgrade --cask yasuhirowevo/tap/agentarium-space
+```
+
+Prebuilt releases are currently available for macOS only. Windows users can
+run Agentarium Space from source using the development instructions below.
+
+## Development from source
+
+Node.js 22.12 or later is required. Contributors should use pnpm for the
+reproducible lockfile-based setup. To try Agentarium Space without installing
+an additional package manager, use the npm version bundled with Node.js.
 
 ### npm (quick start)
 
@@ -59,9 +88,11 @@ Environment variables:
 
 - Tails `~/.claude/projects/**/*.jsonl` and `~/.codex/sessions/**/*.jsonl` in
   **read-only** mode, builds session state, and sends it to the UI over WebSocket
-- Runs entirely locally, with no external network requests or telemetry
-  (listens only on 127.0.0.1; a random token is generated for each launch, and HTTP
-  Host / WebSocket Origin validation prevents cross-origin reads from other websites)
+- After launch, the app runs entirely locally: it listens only on 127.0.0.1,
+  makes no outbound network requests, and sends no telemetry. Homebrew uses
+  the network for installation and upgrades, but the app has no automatic
+  updater. A random token is generated for each launch, and HTTP Host /
+  WebSocket Origin validation prevents cross-origin reads from other websites
 - Stops rendering completely while the window is hidden and supports
   `prefers-reduced-motion`
 

@@ -3,6 +3,18 @@
   "productName": "Agentarium Space",
   "version": "0.1.0",
   "description": "Agentarium Space, a local-only visualizer for Claude Code / Codex CLI sessions",
+  "author": "yasuhirowevo",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yasuhirowevo/agentarium-space.git"
+  },
+  "homepage": "https://github.com/yasuhirowevo/agentarium-space#readme",
+  "bugs": {
+    "url": "https://github.com/yasuhirowevo/agentarium-space/issues"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "type": "module",
   "main": "electron/main.js",
   "private": true,
@@ -11,14 +23,19 @@
     "start": "electron .",
     "web": "node src/server.js",
     "scan": "node src/scan.js",
-    "test": "node --test"
+    "test": "node --test",
+    "package:mac": "electron-builder --mac dir --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false -c.mac.forceCodeSigning=false",
+    "dist:mac": "electron-builder --mac zip --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false -c.mac.forceCodeSigning=false",
+    "dist:mac:signed": "node scripts/build-macos-signed.mjs",
+    "smoke:package": "node scripts/smoke-packaged.mjs"
   },
   "dependencies": {
     "chokidar": "^5.0.0",
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "electron": "^43.1.1"
+    "electron": "^43.1.1",
+    "electron-builder": "26.15.3"
   },
   "packageManager": "pnpm@11.12.0+sha512.820a6fbd0d9f04c226638002aead1e45340a9139dd5dc077c1d83ef44aa2481c8eb6637b4c9aa696a3c7e35ba818e49cf27213e5f2b91138d09b7a3e26e898ba"
 }
