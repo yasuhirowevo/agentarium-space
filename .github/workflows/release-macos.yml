@@ -1,4 +1,4 @@
-name: Release macOS
+name: Release
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
       - "v*"
 
 concurrency:
-  group: release-macos-${{ github.ref }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -14,7 +14,7 @@ permissions:
 
 env:
   NODE_VERSION: "22.21.1"
-  PNPM_VERSION: "11.12.0"
+  PNPM_VERSION: "11.13.1"
 
 jobs:
   preflight:
@@ -214,11 +214,68 @@ jobs:
         if: always()
         run: rm -f "$RUNNER_TEMP/agentarium-notary-key.p8"
 
+  build-windows:
+    name: Build Windows x64
+    needs: preflight
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build Windows portable release
+        run: pnpm run dist:win
+
+      - name: Verify packaged Windows app
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $artifact = "dist/agentarium-space-$env:VERSION-windows-x64.exe"
+          $unpacked = "dist/win-unpacked/Agentarium Space.exe"
+
+          if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) {
+            throw "Missing portable release artifact: $artifact"
+          }
+          if (-not (Test-Path -LiteralPath $unpacked -PathType Leaf)) {
+            throw "Missing unpacked application: $unpacked"
+          }
+
+          pnpm run smoke:package:win "$unpacked" x64
+          if ($LASTEXITCODE -ne 0) {
+            throw "smoke:package:win failed with exit code $LASTEXITCODE"
+          }
+          pnpm run smoke:portable:win "$artifact"
+          if ($LASTEXITCODE -ne 0) {
+            throw "smoke:portable:win failed with exit code $LASTEXITCODE"
+          }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-x64
+          path: dist/agentarium-space-${{ needs.preflight.outputs.version }}-windows-x64.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
   publish-release:
     name: Publish GitHub Release
     needs:
       - preflight
       - build
+      - build-windows
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -235,6 +292,11 @@ jobs:
           path: release
           merge-multiple: true
 
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-x64
+          path: release
+
       - name: Verify assets and calculate checksums
         id: checksums
         shell: bash
@@ -245,15 +307,17 @@ jobs:
 
           arm64="release/agentarium-space-${VERSION}-macos-arm64.zip"
           x64="release/agentarium-space-${VERSION}-macos-x64.zip"
+          windows="release/agentarium-space-${VERSION}-windows-x64.exe"
           test -f "$arm64"
           test -f "$x64"
+          test -f "$windows"
 
           file_count="$(
             find release -maxdepth 1 -type f -print |
               wc -l |
               tr -d '[:space:]'
           )"
-          test "$file_count" = "2"
+          test "$file_count" = "3"
 
           arm64_sha256="$(sha256sum "$arm64" | awk '{print $1}')"
           x64_sha256="$(sha256sum "$x64" | awk '{print $1}')"
@@ -276,6 +340,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             "release/agentarium-space-${VERSION}-macos-arm64.zip" \
             "release/agentarium-space-${VERSION}-macos-x64.zip" \
+            "release/agentarium-space-${VERSION}-windows-x64.exe" \
             --draft \
             --verify-tag \
             --generate-notes \

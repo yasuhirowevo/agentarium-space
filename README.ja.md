@@ -10,6 +10,17 @@
 放置されると目を閉じて縁に沈みます。sub-agent は親の周りを回る小さな光として現れ、
 仕事を終えると粒子になって散ります。
 
+## Windows へのインストール
+
+ビルド済み配布版は Windows 10 以降の x64 PC に対応します。
+[GitHub Releases](https://github.com/yasuhirowevo/agentarium-space/releases) から
+`agentarium-space-<version>-windows-x64.exe` をダウンロードして実行してください。
+インストール不要の portable アプリのため、管理者権限・Node.js・npm・pnpm は不要です。
+
+初期のWindows版は未署名のため、Microsoft SmartScreen の警告が表示される場合があります。
+公式のリリースページから取得したファイルであることを確認してから続行してください。
+更新時は GitHub Releases から新しい EXE をダウンロードし、古いファイルと置き換えます。
+
 ## macOS へのインストール
 
 ビルド済み配布版は macOS 12 Monterey 以降の Apple シリコンと Intel Mac に対応します。
@@ -34,12 +45,9 @@ Homebrew Cask での配布に Apple Developer Program は不要です。任意�
 brew upgrade --cask yasuhirowevo/tap/agentarium-space
 ```
 
-ビルド済みアプリの配布は現在 macOS のみです。Windows では、以下の開発手順に従って
-ソースから実行できます。
-
 ## ソースからの開発・実行
 
-Node.js 22.12 以降が必要です。再現可能な開発環境には lockfile を使う pnpm を推奨します。
+Node.js 22.13 以降が必要です。再現可能な開発環境には lockfile を使う pnpm を推奨します。
 追加のパッケージマネージャーを用意せずに試す場合は、Node.js に同梱されている npm を使えます。
 
 ### npm（手軽に試す）

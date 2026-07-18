@@ -13,7 +13,7 @@
     "url": "https://github.com/yasuhirowevo/agentarium-space/issues"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   },
   "type": "module",
   "main": "electron/main.js",
@@ -27,7 +27,11 @@
     "package:mac": "electron-builder --mac dir --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false -c.mac.forceCodeSigning=false",
     "dist:mac": "electron-builder --mac zip --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false -c.mac.forceCodeSigning=false",
     "dist:mac:signed": "node scripts/build-macos-signed.mjs",
-    "smoke:package": "node scripts/smoke-packaged.mjs"
+    "package:win": "electron-builder --win dir --x64 --publish never",
+    "dist:win": "electron-builder --win portable --x64 --publish never",
+    "smoke:package": "node scripts/smoke-packaged.mjs",
+    "smoke:package:win": "node scripts/smoke-packaged-windows.mjs",
+    "smoke:portable:win": "pwsh -NoProfile -File scripts/smoke-portable-windows.ps1"
   },
   "dependencies": {
     "chokidar": "^5.0.0",
@@ -37,5 +41,5 @@
     "electron": "^43.1.1",
     "electron-builder": "26.15.3"
   },
-  "packageManager": "pnpm@11.12.0+sha512.820a6fbd0d9f04c226638002aead1e45340a9139dd5dc077c1d83ef44aa2481c8eb6637b4c9aa696a3c7e35ba818e49cf27213e5f2b91138d09b7a3e26e898ba"
+  "packageManager": "pnpm@11.13.1+sha512.b2fc7683b8a6525414e7d13e1ba28caaddde96bf66ec540bfaeb7e702b81f3e0be4d1f295edf7f9fe0396740a8dce4509c582ddf79891f4543fea32d37645f25"
 }

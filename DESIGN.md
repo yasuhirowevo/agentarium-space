@@ -55,6 +55,26 @@
 - 自動更新通信は追加しない。更新は GitHub Release と `brew upgrade` に委ね、実行時の
   127.0.0.1 限定・外部送信ゼロ・ログ読み取り専用という既存契約を変えない
 
+## Windows portable 配布（v2.16 — Windows x64）
+
+- v2.15 の macOS / Homebrew Cask 配布はそのまま維持する。Windows 版は Electron ランタイムを
+  同梱した、インストール不要の `Agentarium Space.exe` として配布する。初期対象は Windows 10 以降の
+  x64 とし、利用者側の Node.js / npm / pnpm は不要とする。Windows arm64・インストーラー形式は
+  後続の対象とする
+- GitHub Release のタグは引き続き `v<version>` とし、v2.15 の macOS zip 2 つに加え、
+  `agentarium-space-<version>-windows-x64.exe` を同じ Release に掲載する。Homebrew Cask は macOS
+  成果物だけを参照し、Windows EXE は Cask や Tap の checksum 更新対象に含めない
+- Windows 成果物は `portable` target とする。管理者権限やインストールは要求せず、更新は GitHub Release
+  から利用者が手動で行う。実行時の自動更新通信・外部送信・telemetry は追加しない
+- Windows のコード署名は配布の必須条件にしない。標準リリースは未署名の portable EXE を生成できること。
+  Microsoft SmartScreen が警告する可能性は README に明記し、Authenticode 署名は将来の任意設定として扱う
+- PR と `main` 更新時の CI、およびタグリリースのビルドは Windows runner で実行する。公開前に
+  `win-unpacked` の `Agentarium Space.exe` を空の `USERPROFILE` で起動し、ASAR・ローカル HTTP 配信・
+  Electron ウィンドウの readiness・継続実行を smoke test で確認する。生成した portable EXE も起動し、
+  展開後のアプリが loopback server を待ち受け続けることを確認する
+- 配布アイコンは v2.15 と同じ、UI の寒色 orb 単体を使う。セッション情報を含む画面全体のスクリーンショットは
+  含めない
+
 ## 原則
 
 - **読み取り専用**: ログファイルへの書き込み・改変・削除は一切しない
@@ -66,7 +86,7 @@
 
 - Node.js 22+ / plain JavaScript (ESM, `"type": "module"`) / UI のトランスパイルなし・フレームワークなし
 - dependencies: `chokidar`（ファイル監視）, `ws`（WebSocket）
-- devDependencies: `electron`, `electron-builder`（macOS 配布パッケージ生成のみ）
+- devDependencies: `electron`, `electron-builder`（macOS / Windows 配布パッケージ生成）
 - UI: 素の HTML/CSS/JS + inline SVG
 
 ## プロセス構成
@@ -88,11 +108,11 @@
 ```
 agentarium-space/
   package.json
-  electron-builder.yml   macOS app / zip の配布設定
+  electron-builder.yml   macOS zip / Windows portable EXE の配布設定
   build/                 アイコンと任意署名で使う最小限の entitlement
   electron/main.js        Electron エントリ（BrowserWindow, contextIsolation:true, nodeIntegration:false, sandbox:true, preload なし）
   electron/network-policy.js  Renderer の通信先を起動中の loopback server に限定する純粋関数
-  scripts/                packaged app の smoke test と Homebrew Cask 生成
+  scripts/                macOS / Windows packaged smoke test と Homebrew Cask 生成
   src/
     server.js             起動エントリ: watchers 起動 + HTTP/WS 配信
     state.js              セッション状態モデル（純粋関数中心・watchers から独立してテスト可能）
@@ -595,6 +615,12 @@ startedAt は toPublicSession で公開済み）:
 - `pnpm run dist:mac:signed --arm64` → 資格情報がある場合だけ署名・notarization 済み zip を生成
 - `pnpm run smoke:package "dist/mac-arm64/Agentarium Space.app" arm64` → ASAR 内の server / UI / 依存解決と
   bundle identifier・最低 OS・実行 architecture を確認
+- `pnpm run package:win` → Windows x64 の unpacked app を生成
+- `pnpm run dist:win` → Windows x64 の portable EXE を生成
+- `pnpm run smoke:package:win "dist/win-unpacked/Agentarium Space.exe" x64` → Windows 上で ASAR・実行
+  architecture・ローカル HTTP 配信・Electron ウィンドウの readiness・継続実行を確認
+- `pnpm run smoke:portable:win "dist/agentarium-space-<version>-windows-x64.exe"` → Windows 上で最終
+  portable EXE の展開・起動後に loopback server が継続して待ち受けることを確認
 
 ## v1 スコープ外（実装しない）
 

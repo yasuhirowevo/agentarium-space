@@ -1,4 +1,4 @@
-# Releasing Agentarium Space for macOS
+# Releasing Agentarium Space
 
 The default macOS release uses free ad-hoc code signing and does not require
 the Apple Developer Program, a Developer ID certificate, or notarization.
@@ -77,12 +77,26 @@ pnpm run dist:mac:signed --arm64
 The command rejects missing or partial credentials instead of silently
 publishing a signed but unnotarized ZIP.
 
+On Windows with PowerShell 7, verify the x64 unpacked application and portable
+EXE with:
+
+```powershell
+pnpm install --frozen-lockfile
+pnpm test
+pnpm run scan
+pnpm run package:win
+pnpm run smoke:package:win "dist/win-unpacked/Agentarium Space.exe" x64
+pnpm run dist:win
+$version = node -p "require('./package.json').version"
+pnpm run smoke:portable:win "dist/agentarium-space-$version-windows-x64.exe"
+```
+
 ## Publish a release
 
 1. Update `package.json` to the release version and merge that change to
    `main`.
 2. Tag that exact commit as `v<version>` and push the tag.
-3. Watch the **Release macOS** workflow. It will:
+3. Watch the **Release** workflow. It will:
    - reject a tag that does not match `package.json` or is not reachable from
      `main`;
    - require the free `HOMEBREW_TAP_TOKEN`, then run tests and scan;
@@ -90,11 +104,15 @@ publishing a signed but unnotarized ZIP.
      default;
    - use Developer ID signing, notarization, and staple only when all optional
      Apple secrets are configured;
+   - build the Windows x64 portable EXE on a native Windows runner;
    - verify the selected signature mode, architecture, minimum macOS version,
      loopback-only network policy, privacy-related `Info.plist` keys, ZIP
      layout, and actual packaged-app startup;
-   - place both ZIPs in a Draft GitHub Release and publish it only after both
-     have passed;
+   - verify the unpacked Windows application's local server and Electron
+     window, then verify that the final portable EXE keeps its loopback server
+     running;
+   - place both ZIPs and the Windows EXE in a Draft GitHub Release and publish
+     it only after all three artifacts have passed;
    - render the architecture-specific Cask, audit and fetch both downloads,
      and open a Draft PR in `yasuhirowevo/homebrew-tap`.
 4. Review the Cask version, URLs, and both SHA-256 values, then merge the tap
@@ -105,6 +123,7 @@ The public assets are:
 ```text
 agentarium-space-<version>-macos-arm64.zip
 agentarium-space-<version>-macos-x64.zip
+agentarium-space-<version>-windows-x64.exe
 ```
 
 Each ZIP must contain only `Agentarium Space.app` at its root. If any release

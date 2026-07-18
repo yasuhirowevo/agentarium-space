@@ -40,3 +40,12 @@ mac:
         - arm64
         - x64
   artifactName: agentarium-space-${version}-macos-${arch}.${ext}
+
+win:
+  icon: build/icon.png
+  forceCodeSigning: false
+  target:
+    - target: portable
+      arch:
+        - x64
+  artifactName: agentarium-space-${version}-windows-${arch}.${ext}
