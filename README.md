@@ -10,6 +10,17 @@ send ripples across the surface, thinking sessions breathe with a soft halo, and
 inactive sessions close their eyes and sink toward the edge. Sub-agents appear as
 smaller lights orbiting their parent and dissolve into particles when their work is done.
 
+## Install on Windows
+
+Prebuilt releases support Windows 10 or later on x64 PCs. Download
+`agentarium-space-<version>-windows-x64.exe` from
+[GitHub Releases](https://github.com/yasuhirowevo/agentarium-space/releases), then run it.
+It is a portable app: no installer, administrator permission, Node.js, npm, or pnpm is required.
+
+Initial Windows releases are unsigned, so Microsoft SmartScreen may show a warning.
+Only continue after verifying that the file came from the official release page.
+To upgrade, download the newer EXE from GitHub Releases and replace the older file.
+
 ## Install on macOS
 
 Prebuilt releases support macOS 12 Monterey or later on Apple silicon and
@@ -34,9 +45,6 @@ Upgrade later releases with:
 ```bash
 brew upgrade --cask yasuhirowevo/tap/agentarium-space
 ```
-
-Prebuilt releases are currently available for macOS only. Windows users can
-run Agentarium Space from source using the development instructions below.
 
 ## Development from source
 

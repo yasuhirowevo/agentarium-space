@@ -27,7 +27,11 @@
     "package:mac": "electron-builder --mac dir --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false -c.mac.forceCodeSigning=false",
     "dist:mac": "electron-builder --mac zip --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false -c.mac.forceCodeSigning=false",
     "dist:mac:signed": "node scripts/build-macos-signed.mjs",
-    "smoke:package": "node scripts/smoke-packaged.mjs"
+    "package:win": "electron-builder --win dir --x64 --publish never",
+    "dist:win": "electron-builder --win portable --x64 --publish never",
+    "smoke:package": "node scripts/smoke-packaged.mjs",
+    "smoke:package:win": "node scripts/smoke-packaged-windows.mjs",
+    "smoke:portable:win": "pwsh -NoProfile -File scripts/smoke-portable-windows.ps1"
   },
   "dependencies": {
     "chokidar": "^5.0.0",

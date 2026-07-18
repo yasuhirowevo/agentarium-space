@@ -1,0 +1,56 @@
+name: Windows packaged smoke
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22.21.1"
+  PNPM_VERSION: "11.12.0"
+
+jobs:
+  smoke:
+    name: Build and run Windows x64 package
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm run scan
+      - run: pnpm run dist:win
+
+      - name: Verify portable artifact and run packaged smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = node -p "require('./package.json').version"
+          $artifact = "dist/agentarium-space-$version-windows-x64.exe"
+          $unpacked = "dist/win-unpacked/Agentarium Space.exe"
+
+          if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) {
+            throw "Missing portable release artifact: $artifact"
+          }
+          if (-not (Test-Path -LiteralPath $unpacked -PathType Leaf)) {
+            throw "Missing unpacked application: $unpacked"
+          }
+
+          pnpm run smoke:package:win "$unpacked" x64
+          pnpm run smoke:portable:win "$artifact"
