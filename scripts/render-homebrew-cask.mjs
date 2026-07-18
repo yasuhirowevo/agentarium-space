@@ -29,7 +29,7 @@ export function renderHomebrewCask({ version, arm64Sha256, x64Sha256 }) {
   desc "Local-only visualizer for Claude Code and Codex CLI sessions"
   homepage "https://github.com/yasuhirowevo/agentarium-space"
 
-  depends_on macos: ">= :monterey"
+  depends_on macos: :monterey
 
   app "Agentarium Space.app"
 
