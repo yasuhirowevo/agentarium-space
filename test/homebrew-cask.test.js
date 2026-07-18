@@ -18,6 +18,7 @@ test('renders an architecture-specific Homebrew Cask', () => {
   assert.match(cask, new RegExp(`intel: "${X64_SHA256}"`));
   assert.match(cask, /agentarium-space-#\{version\}-macos-#\{arch\}\.zip/);
   assert.match(cask, /app "Agentarium Space\.app"/);
+  assert.match(cask, /depends_on macos: :monterey/);
   assert.match(cask, /Developer ID signing may be blocked on first launch/);
   assert.match(cask, /System Settings > Privacy & Security/);
   assert.doesNotMatch(cask, /quarantine\s+false/);
