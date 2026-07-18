@@ -50,7 +50,8 @@
   `brew install --cask yasuhirowevo/tap/agentarium-space` とする。Cask は CPU architecture ごとの
   zip と SHA-256 を固定し、`Agentarium Space.app` を `/Applications` へ配置する
 - リリース処理はテスト → arm64 / x64 ビルド → （設定済みの場合のみ署名・notarization）→
-  GitHub Release 公開 → Cask 更新 PR 作成の順に行う。Tap の `main` へ直接 push せず、
+  GitHub Release 公開の順に行う。Tap 書き込み資格情報が設定されている場合だけ、その後に Cask 更新 PR を
+  作成する。資格情報の未設定は GitHub Release の公開を妨げない。Tap の `main` へ直接 push せず、
   version・URL・両 checksum をレビューできる PR を経由する
 - 自動更新通信は追加しない。更新は GitHub Release と `brew upgrade` に委ね、実行時の
   127.0.0.1 限定・外部送信ゼロ・ログ読み取り専用という既存契約を変えない

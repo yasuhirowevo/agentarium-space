@@ -23,6 +23,7 @@ jobs:
     outputs:
       version: ${{ steps.release.outputs.version }}
       signing_enabled: ${{ steps.release.outputs.signing_enabled }}
+      tap_update_enabled: ${{ steps.release.outputs.tap_update_enabled }}
 
     steps:
       - uses: actions/checkout@v7
@@ -64,9 +65,11 @@ jobs:
             exit 1
           fi
 
-          if [[ -z "${HOMEBREW_TAP_TOKEN:-}" ]]; then
-            echo "Missing required secret: HOMEBREW_TAP_TOKEN" >&2
-            exit 1
+          if [[ -n "${HOMEBREW_TAP_TOKEN:-}" ]]; then
+            tap_update_enabled=true
+          else
+            tap_update_enabled=false
+            echo "::notice::HOMEBREW_TAP_TOKEN is not configured; skipping the Tap update."
           fi
 
           signing_secrets=(
@@ -103,8 +106,11 @@ jobs:
             --x64-sha256 "$zero_sha" \
             --output "$RUNNER_TEMP/agentarium-space.rb"
 
-          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-          printf 'signing_enabled=%s\n' "$signing_enabled" >> "$GITHUB_OUTPUT"
+          {
+            printf 'version=%s\n' "$version"
+            printf 'signing_enabled=%s\n' "$signing_enabled"
+            printf 'tap_update_enabled=%s\n' "$tap_update_enabled"
+          } >> "$GITHUB_OUTPUT"
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
@@ -287,6 +293,7 @@ jobs:
     needs:
       - preflight
       - publish-release
+    if: needs.preflight.outputs.tap_update_enabled == 'true'
     runs-on: macos-15
     env:
       HOMEBREW_NO_ANALYTICS: "1"
