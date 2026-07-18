@@ -11,4 +11,5 @@ Agentarium Space の開発を引き継ぐ AI エージェントへ。コード�
 - Anthropic / OpenAI の商標・ロゴ・アセットを使わない
 - レイアウトの再配置・振動アニメ・ダミー計器・オーバーレイ UI を再導入しない
 - 変更は DESIGN.md への仕様追記が先、実装が後
+- Issue・PR・コメントは基本的に英語で書く。依頼文が日本語で書かれていても同様
 - 検証: `pnpm run scan` / `pnpm run web`（stdout に表示された起動ごとの URL を開く）
