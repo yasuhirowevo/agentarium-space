@@ -12,7 +12,7 @@ permissions:
 
 env:
   NODE_VERSION: "22.21.1"
-  PNPM_VERSION: "11.12.0"
+  PNPM_VERSION: "11.13.1"
 
 jobs:
   smoke:

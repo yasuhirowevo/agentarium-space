@@ -47,7 +47,7 @@ brew upgrade --cask yasuhirowevo/tap/agentarium-space
 
 ## ソースからの開発・実行
 
-Node.js 22.12 以降が必要です。再現可能な開発環境には lockfile を使う pnpm を推奨します。
+Node.js 22.13 以降が必要です。再現可能な開発環境には lockfile を使う pnpm を推奨します。
 追加のパッケージマネージャーを用意せずに試す場合は、Node.js に同梱されている npm を使えます。
 
 ### npm（手軽に試す）

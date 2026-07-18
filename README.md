@@ -48,7 +48,7 @@ brew upgrade --cask yasuhirowevo/tap/agentarium-space
 
 ## Development from source
 
-Node.js 22.12 or later is required. Contributors should use pnpm for the
+Node.js 22.13 or later is required. Contributors should use pnpm for the
 reproducible lockfile-based setup. To try Agentarium Space without installing
 an additional package manager, use the npm version bundled with Node.js.
 
