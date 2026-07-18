@@ -9,18 +9,23 @@ Ad-hoc signing satisfies the executable-signing requirement on Apple silicon,
 but it does not identify the publisher or bypass Gatekeeper. Developer ID
 signing and notarization remain an optional enhancement.
 
-## One-time free setup
+## Optional Homebrew Tap automation
+
+Publishing a GitHub Release does not require a Homebrew Tap token. To have the
+release workflow open a Draft Cask update PR automatically:
 
 1. Create the public repository `yasuhirowevo/homebrew-tap` with a `main`
    branch and a top-level `Casks/` directory.
 2. Create a fine-grained GitHub token limited to that tap repository with
    read/write access to repository contents and pull requests.
-3. Configure only this required Actions secret in
-   `yasuhirowevo/agentarium-space`:
+3. Configure this optional Actions secret in `yasuhirowevo/agentarium-space`:
 
-| Secret | Value |
+| Optional secret | Value |
 |---|---|
 | `HOMEBREW_TAP_TOKEN` | Fine-grained token for the tap repository |
+
+When the secret is absent, the workflow still publishes the GitHub Release and
+skips only the Tap update job.
 
 No Apple account, certificate, Apple secret, or paid membership is required
 for this default release path.
@@ -99,7 +104,7 @@ pnpm run smoke:portable:win "dist/agentarium-space-$version-windows-x64.exe"
 3. Watch the **Release** workflow. It will:
    - reject a tag that does not match `package.json` or is not reachable from
      `main`;
-   - require the free `HOMEBREW_TAP_TOKEN`, then run tests and scan;
+   - run tests and scan whether or not `HOMEBREW_TAP_TOKEN` is configured;
    - build and ad-hoc-sign each architecture on a native macOS runner by
      default;
    - use Developer ID signing, notarization, and staple only when all optional
@@ -113,10 +118,13 @@ pnpm run smoke:portable:win "dist/agentarium-space-$version-windows-x64.exe"
      running;
    - place both ZIPs and the Windows EXE in a Draft GitHub Release and publish
      it only after all three artifacts have passed;
-   - render the architecture-specific Cask, audit and fetch both downloads,
-     and open a Draft PR in `yasuhirowevo/homebrew-tap`.
-4. Review the Cask version, URLs, and both SHA-256 values, then merge the tap
-   PR. Do not push Cask updates directly to the tap's `main` branch.
+   - when `HOMEBREW_TAP_TOKEN` is configured, render the
+     architecture-specific Cask, audit and fetch both downloads, and open a
+     Draft PR in `yasuhirowevo/homebrew-tap`; otherwise skip the Tap update
+     without blocking the Release.
+4. If the workflow opens a Tap PR, review the Cask version, URLs, and both
+   SHA-256 values, then merge it. Do not push Cask updates directly to the
+   tap's `main` branch.
 
 The public assets are:
 
@@ -130,7 +138,7 @@ Each ZIP must contain only `Agentarium Space.app` at its root. If any release
 check fails, fix the cause and publish a new patch version; do not replace a
 published asset behind an existing checksum.
 
-After the first tap PR is merged, users can install with:
+After the Cask update is available in the tap, users can install with:
 
 ```bash
 brew install --cask yasuhirowevo/tap/agentarium-space
