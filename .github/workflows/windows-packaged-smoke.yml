@@ -53,4 +53,10 @@ jobs:
           }
 
           pnpm run smoke:package:win "$unpacked" x64
+          if ($LASTEXITCODE -ne 0) {
+            throw "smoke:package:win failed with exit code $LASTEXITCODE"
+          }
           pnpm run smoke:portable:win "$artifact"
+          if ($LASTEXITCODE -ne 0) {
+            throw "smoke:portable:win failed with exit code $LASTEXITCODE"
+          }
