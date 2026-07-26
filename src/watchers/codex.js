@@ -254,8 +254,14 @@ function applySessionMeta(session, record, payload) {
   touchSession(session, record.timestamp ?? payload.timestamp);
   session.id = payload.id;
   if (typeof payload.cwd === 'string') session.cwd = normalizeCwd(payload.cwd);
-  const spawn = payload.source?.subagent?.thread_spawn;
-  session.parentId = typeof spawn?.parent_thread_id === 'string' ? spawn.parent_thread_id : null;
+  const subagent = payload.source?.subagent;
+  const hasSubagentSource = subagent && typeof subagent === 'object' && !Array.isArray(subagent);
+  const spawn = hasSubagentSource ? subagent.thread_spawn : null;
+  session.parentId = typeof spawn?.parent_thread_id === 'string'
+    ? spawn.parent_thread_id
+    : hasSubagentSource && typeof payload.parent_thread_id === 'string'
+      ? payload.parent_thread_id
+      : null;
   session.nickname = typeof spawn?.agent_nickname === 'string' ? spawn.agent_nickname : null;
 }
 
