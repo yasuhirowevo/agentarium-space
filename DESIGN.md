@@ -99,10 +99,12 @@
 1. **メッセージ種別の公開**: `lastMessageKind: 'final' | 'commentary' | 'progress' | null` を追加する
    - Claude の assistant text は従来互換で `final`
    - Codex の `event_msg.agent_message` は `payload.phase === 'commentary'` なら `commentary`、
-     それ以外（`final` または phase 無しの旧形式）は `final`
-   - Codex の完了した `response_item.reasoning.summary[]` にある `summary_text.text` を連結し、
+     それ以外（`final_answer` または phase 無しの旧形式）は `final`
+   - Codex の完了した `response_item.reasoning.summary[]` にある最後の `summary_text.text` を採用し、
      Markdown の太字区切り `**` を除いて空白を正規化した文字列を `progress` とする。
      同じ種別・同じ本文の反復は timestamp を進めない
+   - 同一タスクで `final` を観測した後は、次の `task_started` まで後続の reasoning summary で
+     `lastMessage` を上書きしない。最終回答の直後に追記される summary で発話が消えることを防ぐ
    - ストリーミング途中の `event_msg.agent_reasoning` 断片と `reasoning.encrypted_content` は使用しない。
      部分文字列のちらつきと内部 reasoning の露出を避け、Codex App でも人間向けに表示される
      完了済み summary だけを対象にする
@@ -241,7 +243,7 @@ session = {
   status: 'thinking' | 'tool' | 'waiting' | 'idle',
   activity: string | null,  // 直近の pending ツール名（例 "Bash", "Read", "shell"）
   activityDetail: string | null, // 実行中ツールの対象の短い説明（最大 48 文字・改行除去。v2.2）
-  lastMessage: string | null,    // 直近の AI 発話の冒頭（最大 60 文字・改行→スペース。v2.2）
+  lastMessage: string | null,    // 直近の AI 発話または進捗要約の冒頭（最大 60 文字・改行→スペース。v2.2 / v2.18）
   lastMessageAt: number | null,  // 上記の epoch ms（v2.2）
   lastMessageKind: 'final' | 'commentary' | 'progress' | null, // 発話の表示寿命種別（v2.18）
   lastActivity: number,     // epoch ms（最後に有効レコードを読んだ時刻ではなく、レコードの timestamp）
@@ -602,8 +604,9 @@ startedAt は toPublicSession で公開済み）:
    - 出現・消滅は alpha と伸長率（reach 0→1）の expLerp。アンカーは entity.x/y 直結
      （entity 位置自体が lerp 済みのため震えない）。reduced-motion はアニメなしで即時表示
 2. **スポットライト注記（発話の常時表示）**: 既存 speechBubbles（不透明吹き出し）の置き換え
-   - トリガは現行 emitSpeechBubble と同一（lastMessage の前進検知）。**保持 45 秒**（現行 6 秒から延長）
-     + expLerp フェードアウト。**同時最大 2 件**（新しい発話が押し出した最古はその場からフェード）
+   - トリガは現行 emitSpeechBubble と同一（lastMessage の前進検知）。保持は当初 45 秒
+     （現行 6 秒から延長）とし、v2.18 以降は `progress` 10 秒 / `commentary` 18 秒 / `final` 45 秒とする。
+     いずれも expLerp フェードアウト。**同時最大 2 件**（新しい発話が押し出した最古はその場からフェード）
    - 内容は最新メッセージ抜粋のみ（2 行 × 150px）。枠・背景ボックスは描かない（「覆わない」）
    - スポットライトまたは展開注記のメッセージ行を表示中（alpha > 0.05）の entity は
      名札 3 行目（現行の淡色 lastMessage 行）を出さない（同文の重複防止）。

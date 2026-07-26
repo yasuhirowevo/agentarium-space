@@ -55,6 +55,7 @@ export function createSession(id, source, key) {
     toolCallsTotal: 0,
     lastMainKind: null,
     taskActive: false,
+    finalMessageSeen: false,
   };
 }
 
@@ -114,16 +115,15 @@ export function setSessionTitle(session, field, value) {
 }
 
 export function setLastMessage(session, value, time, kind = 'final') {
-  if (typeof value !== 'string' || !Number.isFinite(time)) return false;
+  if (typeof value !== 'string' || !Number.isFinite(time)) return;
   const compact = value.replace(/\s+/g, ' ').trim();
-  if (!compact) return false;
+  if (!compact) return;
   const message = Array.from(compact).slice(0, 60).join('');
   const messageKind = MESSAGE_KINDS.has(kind) ? kind : 'final';
-  if (session.lastMessage === message && session.lastMessageKind === messageKind) return false;
+  if (session.lastMessage === message && session.lastMessageKind === messageKind) return;
   session.lastMessage = message;
   session.lastMessageAt = time;
   session.lastMessageKind = messageKind;
-  return true;
 }
 
 export function addRecentEvent(session, timestamp, label) {

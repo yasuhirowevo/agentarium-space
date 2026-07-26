@@ -130,21 +130,21 @@ test('publishes Codex commentary and completed reasoning summaries as progress',
       record(300, 'response_item', {
         type: 'reasoning',
         summary: [
-          { type: 'summary_text', text: '**Inspecting ' },
-          { type: 'summary_text', text: 'the window**' },
+          { type: 'summary_text', text: '**Inspecting the window**' },
+          { type: 'summary_text', text: '**Checking the frame**' },
         ],
         encrypted_content: 'must-not-be-exposed',
       }),
       record(400, 'response_item', {
         type: 'reasoning',
         summary: [
-          { type: 'summary_text', text: 'Inspecting the window' },
+          { type: 'summary_text', text: '**Checking the frame**' },
         ],
         encrypted_content: 'different-hidden-content',
       }),
     ]);
 
-    assert.equal(session.lastMessage, 'Inspecting the window');
+    assert.equal(session.lastMessage, 'Checking the frame');
     assert.equal(session.lastMessageKind, 'progress');
     assert.equal(session.lastMessageAt, firstSummaryAt);
   });
@@ -154,7 +154,7 @@ test('publishes Codex commentary and completed reasoning summaries as progress',
       sessionMeta,
       record(100, 'event_msg', {
         type: 'agent_message',
-        phase: 'final',
+        phase: 'final_answer',
         message: 'Completed',
       }),
       record(200, 'event_msg', {
@@ -165,5 +165,83 @@ test('publishes Codex commentary and completed reasoning summaries as progress',
 
     assert.equal(session.lastMessage, 'Completed with legacy metadata');
     assert.equal(session.lastMessageKind, 'final');
+  });
+
+  await t.test('preserves a final message when trailing reasoning arrives', async (subtest) => {
+    const finalAt = startedAt + 200;
+    const session = await scanRecords(subtest, [
+      sessionMeta,
+      record(100, 'event_msg', { type: 'task_started' }),
+      record(200, 'event_msg', {
+        type: 'agent_message',
+        phase: 'final_answer',
+        message: 'Completed',
+      }),
+      record(300, 'response_item', {
+        type: 'reasoning',
+        summary: [
+          { type: 'summary_text', text: '**Summarizing validation**' },
+        ],
+      }),
+      record(400, 'event_msg', { type: 'task_complete' }),
+    ]);
+
+    assert.equal(session.lastMessage, 'Completed');
+    assert.equal(session.lastMessageKind, 'final');
+    assert.equal(session.lastMessageAt, finalAt);
+  });
+
+  await t.test('accepts progress again when the next task starts', async (subtest) => {
+    const session = await scanRecords(subtest, [
+      sessionMeta,
+      record(100, 'event_msg', { type: 'task_started' }),
+      record(200, 'event_msg', {
+        type: 'agent_message',
+        phase: 'final_answer',
+        message: 'First task completed',
+      }),
+      record(300, 'event_msg', { type: 'task_complete' }),
+      record(400, 'event_msg', { type: 'task_started' }),
+      record(500, 'response_item', {
+        type: 'reasoning',
+        summary: [
+          { type: 'summary_text', text: '**Inspecting the next task**' },
+        ],
+      }),
+    ]);
+
+    assert.equal(session.lastMessage, 'Inspecting the next task');
+    assert.equal(session.lastMessageKind, 'progress');
+  });
+
+  await t.test('preserves a repeated final message from trailing reasoning', async (subtest) => {
+    const firstFinalAt = startedAt + 200;
+    const session = await scanRecords(subtest, [
+      sessionMeta,
+      record(100, 'event_msg', { type: 'task_started' }),
+      record(200, 'event_msg', {
+        type: 'agent_message',
+        phase: 'final_answer',
+        message: 'Completed',
+      }),
+      record(300, 'event_msg', { type: 'task_complete' }),
+      record(400, 'event_msg', { type: 'task_started' }),
+      record(500, 'event_msg', {
+        type: 'agent_message',
+        phase: 'final_answer',
+        message: 'Completed',
+      }),
+      record(600, 'response_item', {
+        type: 'reasoning',
+        summary: [
+          { type: 'summary_text', text: '**Summarizing repeated result**' },
+        ],
+      }),
+      record(700, 'event_msg', { type: 'task_complete' }),
+    ]);
+
+    assert.equal(session.lastMessage, 'Completed');
+    assert.equal(session.lastMessageKind, 'final');
+    assert.equal(session.lastMessageAt, firstFinalAt);
   });
 });

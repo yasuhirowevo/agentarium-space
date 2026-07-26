@@ -125,11 +125,10 @@ function agentMessageKind(payload) {
 
 function reasoningSummaryText(payload) {
   if (!Array.isArray(payload.summary)) return '';
-  return payload.summary
-    .filter((item) => item?.type === 'summary_text' && typeof item.text === 'string')
-    .map((item) => item.text)
-    .join('')
-    .replaceAll('**', '');
+  const item = payload.summary
+    .filter((entry) => entry?.type === 'summary_text' && typeof entry.text === 'string')
+    .at(-1);
+  return item?.text.replaceAll('**', '') ?? '';
 }
 
 function shortDetail(value, maximum = 48) {
@@ -299,6 +298,7 @@ function applyRecord(session, record, fileSessionId) {
     const time = touchSession(session, record.timestamp);
     if (payload.type === 'task_started') {
       session.taskActive = true;
+      session.finalMessageSeen = false;
       addRecentEvent(session, record.timestamp, 'Task started');
     } else if (payload.type === 'task_complete') {
       session.taskActive = false;
@@ -307,7 +307,10 @@ function applyRecord(session, record, fileSessionId) {
       setFirstUserPrompt(session, userMessageText(payload));
       addRecentEvent(session, record.timestamp, 'User message');
     } else if (payload.type === 'agent_message') {
-      setLastMessage(session, userMessageText(payload), time, agentMessageKind(payload));
+      const kind = agentMessageKind(payload);
+      const message = userMessageText(payload);
+      setLastMessage(session, message, time, kind);
+      if (kind === 'final' && message.trim()) session.finalMessageSeen = true;
     }
     return;
   }
@@ -331,7 +334,7 @@ function applyRecord(session, record, fileSessionId) {
     const tool = session.pendingTools.get(callId);
     session.pendingTools.delete(callId);
     if (tool) addRecentEvent(session, record.timestamp, toolEventLabel(tool, true));
-  } else if (payload.type === 'reasoning') {
+  } else if (payload.type === 'reasoning' && !session.finalMessageSeen) {
     setLastMessage(session, reasoningSummaryText(payload), time, 'progress');
   }
 }
