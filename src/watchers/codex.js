@@ -119,6 +119,18 @@ function userMessageText(payload) {
   return '';
 }
 
+function agentMessageKind(payload) {
+  return payload.phase === 'commentary' ? 'commentary' : 'final';
+}
+
+function reasoningSummaryText(payload) {
+  if (!Array.isArray(payload.summary)) return '';
+  const item = payload.summary
+    .filter((entry) => entry?.type === 'summary_text' && typeof entry.text === 'string')
+    .at(-1);
+  return item?.text.replaceAll('**', '') ?? '';
+}
+
 function shortDetail(value, maximum = 48) {
   const text = Array.isArray(value) && value.every((item) => typeof item === 'string')
     ? value.join(' ')
@@ -286,6 +298,7 @@ function applyRecord(session, record, fileSessionId) {
     const time = touchSession(session, record.timestamp);
     if (payload.type === 'task_started') {
       session.taskActive = true;
+      session.finalMessageSeen = false;
       addRecentEvent(session, record.timestamp, 'Task started');
     } else if (payload.type === 'task_complete') {
       session.taskActive = false;
@@ -294,7 +307,10 @@ function applyRecord(session, record, fileSessionId) {
       setFirstUserPrompt(session, userMessageText(payload));
       addRecentEvent(session, record.timestamp, 'User message');
     } else if (payload.type === 'agent_message') {
-      setLastMessage(session, userMessageText(payload), time);
+      const kind = agentMessageKind(payload);
+      const message = userMessageText(payload);
+      setLastMessage(session, message, time, kind);
+      if (kind === 'final' && message.trim()) session.finalMessageSeen = true;
     }
     return;
   }
@@ -318,6 +334,8 @@ function applyRecord(session, record, fileSessionId) {
     const tool = session.pendingTools.get(callId);
     session.pendingTools.delete(callId);
     if (tool) addRecentEvent(session, record.timestamp, toolEventLabel(tool, true));
+  } else if (payload.type === 'reasoning' && !session.finalMessageSeen) {
+    setLastMessage(session, reasoningSummaryText(payload), time, 'progress');
   }
 }
 
@@ -343,7 +361,7 @@ function applyMetaRecord(session, record, fileSessionId) {
     if (payload.type === 'user_message') {
       setFirstUserPrompt(session, userMessageText(payload));
     } else if (payload.type === 'agent_message') {
-      setLastMessage(session, userMessageText(payload), time);
+      setLastMessage(session, userMessageText(payload), time, agentMessageKind(payload));
     }
     return;
   }

@@ -5,6 +5,7 @@ const CLAUDE_STREAMING_MS = 10 * 1000;
 const DONE_SUB_AGENT_MS = 60 * 1000;
 const DEFAULT_ACTIVE_WINDOW_MS = 60 * 60 * 1000;
 const MAX_FUTURE_MS = 60 * 1000;
+const MESSAGE_KINDS = new Set(['final', 'commentary', 'progress']);
 
 export function activeWindowMs(env = process.env) {
   const minutes = Number(env.AGENTARIUM_WINDOW_MIN);
@@ -41,6 +42,7 @@ export function createSession(id, source, key) {
     recentEvents: [],
     lastMessage: null,
     lastMessageAt: null,
+    lastMessageKind: null,
     contextUsedTokens: null,
     contextWindowTokens: null,
     model: null,
@@ -53,6 +55,7 @@ export function createSession(id, source, key) {
     toolCallsTotal: 0,
     lastMainKind: null,
     taskActive: false,
+    finalMessageSeen: false,
   };
 }
 
@@ -111,12 +114,16 @@ export function setSessionTitle(session, field, value) {
   session[field] = Array.from(value).slice(0, 120).join('');
 }
 
-export function setLastMessage(session, value, time) {
+export function setLastMessage(session, value, time, kind = 'final') {
   if (typeof value !== 'string' || !Number.isFinite(time)) return;
   const compact = value.replace(/\s+/g, ' ').trim();
   if (!compact) return;
-  session.lastMessage = Array.from(compact).slice(0, 60).join('');
+  const message = Array.from(compact).slice(0, 60).join('');
+  const messageKind = MESSAGE_KINDS.has(kind) ? kind : 'final';
+  if (session.lastMessage === message && session.lastMessageKind === messageKind) return;
+  session.lastMessage = message;
   session.lastMessageAt = time;
+  session.lastMessageKind = messageKind;
 }
 
 export function addRecentEvent(session, timestamp, label) {
@@ -196,6 +203,11 @@ export function toPublicSession(session, now, windowMs = activeWindowMs()) {
     activityDetail: activity?.detail ?? null,
     lastMessage: session.lastMessage,
     lastMessageAt: session.lastMessageAt,
+    lastMessageKind: MESSAGE_KINDS.has(session.lastMessageKind)
+      ? session.lastMessageKind
+      : session.lastMessage
+        ? 'final'
+        : null,
     contextUsedTokens: Number.isFinite(session.contextUsedTokens) ? session.contextUsedTokens : null,
     contextWindowTokens: Number.isFinite(session.contextWindowTokens) ? session.contextWindowTokens : null,
     model: typeof session.model === 'string' ? session.model : null,
