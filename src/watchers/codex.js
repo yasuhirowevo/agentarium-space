@@ -119,6 +119,19 @@ function userMessageText(payload) {
   return '';
 }
 
+function agentMessageKind(payload) {
+  return payload.phase === 'commentary' ? 'commentary' : 'final';
+}
+
+function reasoningSummaryText(payload) {
+  if (!Array.isArray(payload.summary)) return '';
+  return payload.summary
+    .filter((item) => item?.type === 'summary_text' && typeof item.text === 'string')
+    .map((item) => item.text)
+    .join('')
+    .replaceAll('**', '');
+}
+
 function shortDetail(value, maximum = 48) {
   const text = Array.isArray(value) && value.every((item) => typeof item === 'string')
     ? value.join(' ')
@@ -294,7 +307,7 @@ function applyRecord(session, record, fileSessionId) {
       setFirstUserPrompt(session, userMessageText(payload));
       addRecentEvent(session, record.timestamp, 'User message');
     } else if (payload.type === 'agent_message') {
-      setLastMessage(session, userMessageText(payload), time);
+      setLastMessage(session, userMessageText(payload), time, agentMessageKind(payload));
     }
     return;
   }
@@ -318,6 +331,8 @@ function applyRecord(session, record, fileSessionId) {
     const tool = session.pendingTools.get(callId);
     session.pendingTools.delete(callId);
     if (tool) addRecentEvent(session, record.timestamp, toolEventLabel(tool, true));
+  } else if (payload.type === 'reasoning') {
+    setLastMessage(session, reasoningSummaryText(payload), time, 'progress');
   }
 }
 
@@ -343,7 +358,7 @@ function applyMetaRecord(session, record, fileSessionId) {
     if (payload.type === 'user_message') {
       setFirstUserPrompt(session, userMessageText(payload));
     } else if (payload.type === 'agent_message') {
-      setLastMessage(session, userMessageText(payload), time);
+      setLastMessage(session, userMessageText(payload), time, agentMessageKind(payload));
     }
     return;
   }

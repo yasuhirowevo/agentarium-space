@@ -1,3 +1,10 @@
+import {
+  normalizeMessageKind,
+  shouldBootstrapSpotlight,
+  SPOTLIGHT_CALLOUT_LIMIT,
+  spotlightDurationFor,
+} from './callout-policy.js';
+
 const STATUS_LABELS = {
   thinking: '考え中',
   tool: 'ツール実行中',
@@ -40,8 +47,6 @@ const SATELLITE_BELT_SPACING = 56;
 const SATELLITE_BELT_GAP = 20;
 const EVENT_POP_LIMIT = 8;
 const EVENT_POP_DURATION = 1.4;
-const SPOTLIGHT_CALLOUT_LIMIT = 2;
-const SPOTLIGHT_CALLOUT_DURATION = 45;
 const CALLOUT_DIAGONAL_LENGTH = 28;
 const CALLOUT_LABEL_MAX_WIDTH = 150;
 const CALLOUT_LABEL_LINE_HEIGHT = 12;
@@ -269,6 +274,7 @@ function normalizedSession(session) {
     activityDetail: typeof session.activityDetail === 'string' ? session.activityDetail : null,
     lastMessage: typeof session.lastMessage === 'string' ? session.lastMessage : null,
     lastMessageAt: Number.isFinite(session.lastMessageAt) ? session.lastMessageAt : null,
+    lastMessageKind: normalizeMessageKind(session.lastMessageKind),
     contextUsedTokens: Number.isFinite(session.contextUsedTokens) && session.contextUsedTokens >= 0
       ? session.contextUsedTokens
       : null,
@@ -413,10 +419,11 @@ class Store {
       if (isNew) {
         entity = this.createEntity(session);
         this.entities.set(session.key, entity);
+        this.emitSpotlightCallout(null, session, observedAt);
       } else {
         if (entity.session.lastActivity !== session.lastActivity) entity.pendingActivityRipple = true;
         this.emitEventPop(entity, entity.session.recentEvents, session.recentEvents);
-        this.emitSpotlightCallout(entity.session, session);
+        this.emitSpotlightCallout(entity.session, session, observedAt);
       }
 
       entity.session = session;
@@ -513,11 +520,15 @@ class Store {
     this.statusHistory.set(session.key, history);
   }
 
-  emitSpotlightCallout(previousSession, nextSession) {
+  emitSpotlightCallout(previousSession, nextSession, observedAt) {
     if (!nextSession.lastMessage || nextSession.lastMessageAt === null) return;
-    const previousAt = previousSession.lastMessageAt;
-    if (previousAt !== null && nextSession.lastMessageAt <= previousAt) return;
-    if (previousAt === null && previousSession.lastMessage === nextSession.lastMessage) return;
+    if (previousSession) {
+      const previousAt = previousSession.lastMessageAt;
+      if (previousAt !== null && nextSession.lastMessageAt <= previousAt) return;
+      if (previousAt === null && previousSession.lastMessage === nextSession.lastMessage) return;
+    } else if (!shouldBootstrapSpotlight(nextSession, observedAt)) {
+      return;
+    }
 
     const previous = this.spotlightCallouts.get(nextSession.key);
     this.spotlightCallouts.delete(nextSession.key);
@@ -525,7 +536,7 @@ class Store {
       entityKey: nextSession.key,
       message: nextSession.lastMessage,
       age: 0,
-      duration: SPOTLIGHT_CALLOUT_DURATION,
+      duration: spotlightDurationFor(nextSession.lastMessageKind),
       alpha: previous?.alpha || 0,
       reach: previous?.reach || 0,
       active: true,

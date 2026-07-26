@@ -34,6 +34,21 @@ async function scanSession(t, metadata) {
   return sessions[0];
 }
 
+async function scanRecords(t, records) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentarium-codex-watcher-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const directory = path.join(root, '2026', '07', '26');
+  await mkdir(directory, { recursive: true });
+  const filePath = path.join(directory, `rollout-2026-07-26T09-00-00-${SESSION_ID}.jsonl`);
+  await writeFile(filePath, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
+
+  const watcher = createCodexWatcher({ root, windowMs: 60_000 });
+  const sessions = await watcher.scan(Date.now());
+  assert.equal(sessions.length, 1);
+  return sessions[0];
+}
+
 test('derives Codex parent relationships only from subagent metadata', async (t) => {
   await t.test('keeps the existing thread_spawn parent and nickname', async (subtest) => {
     const session = await scanSession(subtest, {
@@ -73,5 +88,82 @@ test('derives Codex parent relationships only from subagent metadata', async (t)
     });
 
     assert.equal(session.parentId, null);
+  });
+});
+
+test('publishes Codex commentary and completed reasoning summaries as progress', async (t) => {
+  const startedAt = Date.now() - 5_000;
+  const record = (offset, type, payload) => ({
+    timestamp: new Date(startedAt + offset).toISOString(),
+    type,
+    payload,
+  });
+  const sessionMeta = record(0, 'session_meta', {
+    id: SESSION_ID,
+    cwd: 'C:\\workspace\\project',
+  });
+
+  await t.test('classifies commentary separately from final messages', async (subtest) => {
+    const session = await scanRecords(subtest, [
+      sessionMeta,
+      record(100, 'event_msg', { type: 'task_started' }),
+      record(200, 'event_msg', {
+        type: 'agent_message',
+        phase: 'commentary',
+        message: '起動状態を確認しています',
+      }),
+    ]);
+
+    assert.equal(session.lastMessage, '起動状態を確認しています');
+    assert.equal(session.lastMessageKind, 'commentary');
+  });
+
+  await t.test('uses only completed human-readable reasoning summaries', async (subtest) => {
+    const firstSummaryAt = startedAt + 300;
+    const session = await scanRecords(subtest, [
+      sessionMeta,
+      record(100, 'event_msg', { type: 'task_started' }),
+      record(200, 'event_msg', {
+        type: 'agent_reasoning',
+        text: 'streaming fragment',
+      }),
+      record(300, 'response_item', {
+        type: 'reasoning',
+        summary: [
+          { type: 'summary_text', text: '**Inspecting ' },
+          { type: 'summary_text', text: 'the window**' },
+        ],
+        encrypted_content: 'must-not-be-exposed',
+      }),
+      record(400, 'response_item', {
+        type: 'reasoning',
+        summary: [
+          { type: 'summary_text', text: 'Inspecting the window' },
+        ],
+        encrypted_content: 'different-hidden-content',
+      }),
+    ]);
+
+    assert.equal(session.lastMessage, 'Inspecting the window');
+    assert.equal(session.lastMessageKind, 'progress');
+    assert.equal(session.lastMessageAt, firstSummaryAt);
+  });
+
+  await t.test('treats final and legacy agent messages as final', async (subtest) => {
+    const session = await scanRecords(subtest, [
+      sessionMeta,
+      record(100, 'event_msg', {
+        type: 'agent_message',
+        phase: 'final',
+        message: 'Completed',
+      }),
+      record(200, 'event_msg', {
+        type: 'agent_message',
+        message: 'Completed with legacy metadata',
+      }),
+    ]);
+
+    assert.equal(session.lastMessage, 'Completed with legacy metadata');
+    assert.equal(session.lastMessageKind, 'final');
   });
 });

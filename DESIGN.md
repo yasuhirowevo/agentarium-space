@@ -88,6 +88,42 @@
 - UI の Satellite 表現と親不在時の単独表示は既存仕様を維持する。回帰検証では thread_spawn 形式、
   guardian 形式、subagent source のない直下 parent 形式をそれぞれ確認する
 
+## Codex 途中経過注記（v2.18 — reasoning summary の実況）
+
+> Codex App は最終回答だけでなく、タスク途中の commentary と短い reasoning summary を逐次表示する。
+> Agentarium Space もこの「いま何を考え、どこまで進んだか」を引出線で見せる。ただし全ツールイベントを
+> Canvas に流すのではなく、人間向けに生成済みの発話・要約だけを使い、既存の静かな情報密度を維持する。
+
+コア側（watchers/codex.js + state.js）:
+
+1. **メッセージ種別の公開**: `lastMessageKind: 'final' | 'commentary' | 'progress' | null` を追加する
+   - Claude の assistant text は従来互換で `final`
+   - Codex の `event_msg.agent_message` は `payload.phase === 'commentary'` なら `commentary`、
+     それ以外（`final` または phase 無しの旧形式）は `final`
+   - Codex の完了した `response_item.reasoning.summary[]` にある `summary_text.text` を連結し、
+     Markdown の太字区切り `**` を除いて空白を正規化した文字列を `progress` とする。
+     同じ種別・同じ本文の反復は timestamp を進めない
+   - ストリーミング途中の `event_msg.agent_reasoning` 断片と `reasoning.encrypted_content` は使用しない。
+     部分文字列のちらつきと内部 reasoning の露出を避け、Codex App でも人間向けに表示される
+     完了済み summary だけを対象にする
+2. `lastMessage` / `lastMessageAt` の既存契約と最大 60 文字は維持し、
+   `lastMessageKind` を WebSocket の公開 session に加える。未知の種別は UI で `final` にフォールバックする
+
+UI 側（ui/office.js）:
+
+1. **種別別の保持時間**: 同じ引出線プリミティブを使い、`progress` は 10 秒、
+   `commentary` は 18 秒、`final` は従来どおり 45 秒保持する
+2. **密度上限を維持**: 同一 orb の新着は既存注記を置き換え、画面全体の同時最大 2 件を維持する。
+   ツール開始・完了は従来どおりネームプレート状態行・イベントポップ・LIVE STREAM が担い、
+   スポットライト注記へは追加しない
+3. **起動直後の新鮮な進捗**: 初回 snapshot または新規 entity 作成時でも、
+   `thinking` / `tool` 状態にある `commentary` / `progress` が観測時刻から 20 秒以内なら
+   1 回だけスポットライト表示する。古い発話・完了済み `final` は再生しない。
+   複数 session が該当しても既存の「新しい順・最大 2 件」を適用する
+
+制約: v2.13 の描画順・衝突回避・fillText・expLerp・reduced-motion をそのまま使う。
+新しい常設要素、背景ボックス、点滅、レイアウト再配置は追加しない。
+
 ## 原則
 
 - **読み取り専用**: ログファイルへの書き込み・改変・削除は一切しない
@@ -207,6 +243,7 @@ session = {
   activityDetail: string | null, // 実行中ツールの対象の短い説明（最大 48 文字・改行除去。v2.2）
   lastMessage: string | null,    // 直近の AI 発話の冒頭（最大 60 文字・改行→スペース。v2.2）
   lastMessageAt: number | null,  // 上記の epoch ms（v2.2）
+  lastMessageKind: 'final' | 'commentary' | 'progress' | null, // 発話の表示寿命種別（v2.18）
   lastActivity: number,     // epoch ms（最後に有効レコードを読んだ時刻ではなく、レコードの timestamp）
   gitBranch: string | null,
   parentId: string | null,  // Codex sub-agent rollout のとき親 session id
