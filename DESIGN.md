@@ -76,6 +76,18 @@
 - 配布アイコンは v2.15 と同じ、UI の寒色 orb 単体を使う。セッション情報を含む画面全体のスクリーンショットは
   含めない
 
+## Codex auto-review の親子関係（v2.17 — guardian メタデータ）
+
+- Codex sub-agent の `session_meta` は、通常の
+  `payload.source.subagent.thread_spawn.parent_thread_id` に加え、auto-review では
+  `payload.source.subagent.other === "guardian"` と payload 直下の `parent_thread_id` の組み合わせで
+  親を示す。この guardian 形式も `session.parentId` として公開し、親が表示中なら Satellite として描画する
+- 親 ID の優先順位は `thread_spawn.parent_thread_id` → payload 直下の `parent_thread_id` とする。
+  ただし直下の値を採用するのは `payload.source.subagent` がオブジェクトとして存在する場合だけとし、
+  通常セッションや fork を誤って子セッションにしない
+- UI の Satellite 表現と親不在時の単独表示は既存仕様を維持する。回帰検証では thread_spawn 形式、
+  guardian 形式、subagent source のない直下 parent 形式をそれぞれ確認する
+
 ## 原則
 
 - **読み取り専用**: ログファイルへの書き込み・改変・削除は一切しない
@@ -157,7 +169,10 @@ agentarium-space/
 - 1 行 1 JSON: `{timestamp, type, payload}`
 - `type === "session_meta"`（先頭行）: `payload = {id, timestamp, cwd, originator, cli_version, source, ...}`
   - `payload.source.subagent.thread_spawn = {parent_thread_id, depth, agent_path}` が**あれば sub-agent セッション** → 親 rollout（`payload.id === parent_thread_id`）のデスクにぶら下げる。親が表示対象外なら単独表示
-  - fork 情報 `forked_from_id` / `parent_thread_id` が payload 直下に来る形も確認済み（subagent source が無ければ通常セッション扱い）
+  - auto-review は `payload.source.subagent.other === "guardian"` +
+    payload 直下の `parent_thread_id` で親を示す。この形式も sub-agent セッションとして扱う
+  - fork 情報 `forked_from_id` / `parent_thread_id` が payload 直下に来る形も確認済み
+    （subagent source が無ければ通常セッション扱い）
 - `type === "turn_context"`: `payload = {turn_id, cwd, workspace_roots, ...}`（cwd の最新値として利用）
 - `type === "event_msg"`: `payload.type` ∈ `task_started` / `task_complete` / `agent_message` / `user_message` / `token_count` / `sub_agent_activity {agent_thread_id, agent_path, kind:"started"|...}` / `patch_apply_end` / 他
 - `type === "response_item"`: `payload.type` ∈ `function_call {name, arguments, call_id?}` / `function_call_output` / `custom_tool_call` / `custom_tool_call_output` / `reasoning` / `message` / 他
