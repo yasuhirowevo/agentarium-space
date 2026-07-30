@@ -1,7 +1,7 @@
 {
   "name": "agentarium-space",
   "productName": "Agentarium Space",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Agentarium Space, a local-only visualizer for Claude Code / Codex CLI sessions",
   "author": "yasuhirowevo",
   "repository": {
