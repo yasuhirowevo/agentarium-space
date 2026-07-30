@@ -97,7 +97,7 @@
 コア側（watchers/codex.js + state.js）:
 
 1. **メッセージ種別の公開**: `lastMessageKind: 'final' | 'commentary' | 'progress' | null` を追加する
-   - Claude の assistant text は従来互換で `final`
+   - Claude の assistant text は従来互換で `final`（v2.19 で途中発話だけを再分類）
    - Codex の `event_msg.agent_message` は `payload.phase === 'commentary'` なら `commentary`、
      それ以外（`final_answer` または phase 無しの旧形式）は `final`
    - Codex の完了した `response_item.reasoning.summary[]` にある最後の `summary_text.text` を採用し、
@@ -125,6 +125,30 @@ UI 側（ui/office.js）:
 
 制約: v2.13 の描画順・衝突回避・fillText・expLerp・reduced-motion をそのまま使う。
 新しい常設要素、背景ボックス、点滅、レイアウト再配置は追加しない。
+
+## Claude 途中発話注記（v2.19 — stop_reason による実況）
+
+> Claude Code の実ログでは、人間向けの途中発話と後続の `tool_use` が別々の assistant レコードとして
+> 記録される。同一レコード内の content 種別ではなく、応答がツール実行へ続くことを示す
+> `message.stop_reason` を使い、Codex と同じ引出線プリミティブで途中経過を見せる。
+
+コア側（watchers/claude.js）:
+
+1. sidechain ではない assistant の text を、`message.stop_reason === "tool_use"` なら
+   `lastMessageKind: "commentary"`、それ以外（`"end_turn"`、未設定、未知値を含む）は
+   従来互換の `"final"` とする。`progress` は Codex の完了済み reasoning summary 専用のまま維持する
+2. 通常の増分レコードと、大きいログの初回 head 領域へ同じ分類を適用する。
+   text と同一 `message.id` の `tool_use` が後続の別レコードに現れても、空の tool レコードで
+   直前の `lastMessage` / `lastMessageKind` を消さない
+3. `thinking` / `redacted_thinking` は発話に使わず、従来どおり text だけを抽出する。
+   sidechain の発話もメイン session の `lastMessage` へ反映しない
+4. commentary の text レコードは「応答完了」ではなくツール実行へ続く途中状態として扱い、
+   pending tool レコードの到着前も Claude session を `thinking` に保つ。
+   final の text-only レコードだけは従来どおり 10 秒未満を `thinking`、以後を `waiting` とする
+
+UI 側は v2.18 の source 非依存ポリシーをそのまま使う。Claude commentary も 18 秒保持し、
+起動直後に 20 秒以内かつ `thinking` / `tool` なら 1 回だけスポットライト表示する。
+新しい描画プリミティブ・常設要素・密度上限は追加しない。
 
 ## 原則
 
@@ -185,7 +209,8 @@ agentarium-space/
 - `<sessionId>/` という**サブディレクトリ**（tool-results 等）も並存するが**監視対象外**。`*.jsonl` 直下のみ見る
 - 1 行 1 JSON。主な `type`: `user` / `assistant` / `queue-operation` / `ai-title` / `custom-title` / `last-prompt` / `pr-link` / `mode` / `summary` / `system`（他にもあり得る。未知は無視）
 - 共通フィールド（user/assistant 等に付く）: `timestamp`(ISO8601) / `sessionId` / `cwd`(Windows 形式 `C:\\...`) / `gitBranch` / `version` / `isSidechain`(bool)
-- `assistant`: `message.content[]` に `{type:"text"|"thinking"|"tool_use"}`。`tool_use = {id, name, input}`
+- `assistant`: `message.content[]` に `{type:"text"|"thinking"|"tool_use"}`。`tool_use = {id, name, input}`。
+  `message.stop_reason` は実機確認済みの `"tool_use"` / `"end_turn"` に加えて、未設定・未知値を許容する
 - `user`: 実ユーザー発話のほか、`message.content[]` に `{type:"tool_result", tool_use_id}` を含む「ツール完了」レコードが来る
 - **sub-agent**: `name === "Agent"`（旧バージョン互換で `"Task"` も）の tool_use。`input: {description, subagent_type, run_in_background, prompt}`。対応する `tool_result` が来るまで「稼働中 sub-agent」とみなす
   - 制約: `run_in_background: true` の agent は tool_result が早期に返るため追跡できない場合がある（v1 の既知の限界として README に記載）

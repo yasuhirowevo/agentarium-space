@@ -17,6 +17,7 @@ test('uses shorter spotlight durations for in-progress messages', () => {
 test('bootstraps only fresh progress from active sessions', () => {
   const now = Date.parse('2026-07-26T05:00:00.000Z');
   const session = {
+    source: 'claude',
     status: 'thinking',
     lastMessage: '起動状態を確認',
     lastMessageAt: now - 20_000,
