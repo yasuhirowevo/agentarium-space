@@ -274,20 +274,30 @@ async function readDelegationFile(filePath, now) {
   return parseDelegationRecord(JSON.parse(raw), now);
 }
 
-function abortPromise(signal) {
-  return new Promise((_, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason ?? new Error('aborted'));
+function waitWithGuards(operation, signal, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      callback(value);
+    };
+    const onAbort = () => finish(reject, signal.reason ?? new Error('aborted'));
+    const timer = setTimeout(
+      () => finish(reject, new Error('delegation reader startup timed out')),
+      timeoutMs,
+    );
+    if (signal?.aborted) {
+      onAbort();
       return;
     }
-    signal.addEventListener('abort', () => reject(signal.reason ?? new Error('aborted')), { once: true });
-  });
-}
-
-function timeoutPromise(milliseconds) {
-  return new Promise((_, reject) => {
-    const timer = setTimeout(() => reject(new Error('delegation reader startup timed out')), milliseconds);
-    timer.unref?.();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve(operation).then(
+      (value) => finish(resolve, value),
+      (error) => finish(reject, error),
+    );
   });
 }
 
@@ -359,7 +369,7 @@ export function createDelegationReader({
   async function startInternal(localGeneration, signal) {
     let localWatcher = null;
     try {
-      await Promise.race([scan(), abortPromise(signal), timeoutPromise(startupTimeoutMs)]);
+      await waitWithGuards(scan(), signal, startupTimeoutMs);
       if (signal.aborted || generation !== localGeneration || state === 'closing' || state === 'closed') return;
       localWatcher = watchFactory(root, { depth: 0, ignoreInitial: true, persistent: true });
       watcher = localWatcher;
@@ -374,7 +384,7 @@ export function createDelegationReader({
         }
       });
       const ready = new Promise((resolve) => localWatcher.once('ready', resolve));
-      await Promise.race([ready, abortPromise(signal), timeoutPromise(startupTimeoutMs)]);
+      await waitWithGuards(ready, signal, startupTimeoutMs);
       if (signal.aborted || generation !== localGeneration || state === 'closing' || state === 'closed') {
         await localWatcher.close().catch(() => {});
         if (watcher === localWatcher) watcher = null;
@@ -382,7 +392,7 @@ export function createDelegationReader({
       }
       // Close the scan-to-watch gap: a sidecar created after the initial
       // directory read but before the watcher became ready may not emit add.
-      await Promise.race([scan(), abortPromise(signal), timeoutPromise(startupTimeoutMs)]);
+      await waitWithGuards(scan(), signal, startupTimeoutMs);
       if (signal.aborted || generation !== localGeneration || state === 'closing' || state === 'closed') {
         await localWatcher.close().catch(() => {});
         if (watcher === localWatcher) watcher = null;
@@ -416,7 +426,7 @@ export function createDelegationReader({
     watcher = null;
     if (localWatcher) await localWatcher.close().catch(() => {});
     if (startPromise) {
-      await Promise.race([startPromise, timeoutPromise(startupTimeoutMs)]).catch(() => {});
+      await waitWithGuards(startPromise, null, startupTimeoutMs).catch(() => {});
     }
     records.clear();
     state = 'closed';
