@@ -2,6 +2,12 @@ import { readdir, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import chokidar from 'chokidar';
+import {
+  activeDelegationStarts,
+  delegationLinkIdFromCommand,
+  recordDelegationStart,
+  recoverDelegationStartsFromFiles,
+} from '../delegations.js';
 import { JsonlTail } from '../tail.js';
 import {
   activeWindowMs,
@@ -50,7 +56,7 @@ function createIgnoredWatchPath(root) {
   };
 }
 
-async function findRecentLogs(root, now) {
+async function findRecentLogs(root, now, windowMs = INITIAL_FILE_WINDOW_MS) {
   const found = [];
   try {
     const projects = await readdir(root, { withFileTypes: true });
@@ -67,7 +73,7 @@ async function findRecentLogs(root, now) {
         const filePath = path.join(projectDir, entry.name);
         try {
           const info = await stat(filePath);
-          if (now - info.mtimeMs <= INITIAL_FILE_WINDOW_MS) found.push(filePath);
+          if (now - info.mtimeMs <= windowMs) found.push(filePath);
         } catch (error) {
           debug(`could not stat ${filePath}`, error);
         }
@@ -177,7 +183,19 @@ function toolEventLabel(tool, done = false) {
   return done ? `${target} done` : target;
 }
 
-function applyRecord(session, record) {
+function delegationStartFromRecord(session, record, delegationStarts) {
+  if (record?.type !== 'assistant' || record.isSidechain === true) return;
+  const startedAt = Date.parse(record.timestamp);
+  if (!Number.isFinite(startedAt)) return;
+  for (const item of messageContent(record)) {
+    if (item?.type !== 'tool_use' || typeof item.name !== 'string') continue;
+    if (item.name.toLowerCase() !== 'bash') continue;
+    const linkId = delegationLinkIdFromCommand(item.input?.command, 'codex');
+    if (linkId) recordDelegationStart(delegationStarts, linkId, session.key, 'claude', startedAt);
+  }
+}
+
+function applyRecord(session, record, delegationStarts) {
   if (!record || typeof record !== 'object') return;
   applyRichFields(session, record);
   const isSidechain = record.isSidechain === true;
@@ -199,6 +217,7 @@ function applyRecord(session, record) {
 
   const time = touchSession(session, record.timestamp);
   const content = messageContent(record);
+  delegationStartFromRecord(session, record, delegationStarts);
 
   if (record.type === 'user') {
     const toolResults = content.filter((item) => item?.type === 'tool_result');
@@ -296,6 +315,7 @@ export function createClaudeWatcher({
   root = path.resolve(root);
   const tail = new JsonlTail();
   const sessions = new Map();
+  const delegationStarts = new Map();
   const fileQueues = new Map();
   let watcher = null;
 
@@ -327,7 +347,7 @@ export function createClaudeWatcher({
           sessions.set(filePath, session);
         }
         for (const record of result.metaRecords) applyMetaRecord(session, record);
-        for (const record of result.records) applyRecord(session, record);
+        for (const record of result.records) applyRecord(session, record, delegationStarts);
         if (result.metaRecords.length > 0 || result.records.length > 0 || result.reset) onUpdate();
       } catch (error) {
         debug(`could not process ${filePath}`, error);
@@ -339,6 +359,37 @@ export function createClaudeWatcher({
     const files = await findRecentLogs(root, now);
     await runWithConcurrency(files, processFile);
     return getSessions(now);
+  }
+
+  function parseRecoveryRecord(record, filePath) {
+    const session = sessions.get(filePath) ?? createSession(
+      path.basename(filePath, path.extname(filePath)),
+      'claude',
+      normalizeCwd(path.resolve(filePath)),
+    );
+    delegationStartFromRecord(session, record, delegationStarts);
+    for (const item of messageContent(record)) {
+      if (item?.type !== 'tool_use' || item.name?.toLowerCase() !== 'bash') continue;
+      const linkId = delegationLinkIdFromCommand(item.input?.command, 'codex');
+      if (linkId) return { linkId };
+    }
+    return null;
+  }
+
+  async function recoverDelegationStarts(records, now = Date.now()) {
+    const relevant = records
+      .filter((record) => record.childSource === 'codex')
+      .slice(0, 64);
+    const known = new Set(activeDelegationStarts(delegationStarts, now).map((start) => start.linkId));
+    const unresolved = relevant.filter((record) => !known.has(record.linkId));
+    if (unresolved.length === 0) return;
+    const earliest = Math.min(...unresolved.map((record) => record.startedAt));
+    const files = await findRecentLogs(root, now, Math.max(INITIAL_FILE_WINDOW_MS, now - earliest + 60_000));
+    await recoverDelegationStartsFromFiles({
+      files,
+      linkIds: unresolved.map((record) => record.linkId),
+      parseRecord: parseRecoveryRecord,
+    });
   }
 
   function getSessions(now = Date.now()) {
@@ -379,5 +430,13 @@ export function createClaudeWatcher({
     watcher = null;
   }
 
-  return { scan, start, close, getSessions, sessions };
+  return {
+    scan,
+    start,
+    close,
+    getSessions,
+    sessions,
+    recoverDelegationStarts,
+    getDelegationStarts: (now = Date.now()) => activeDelegationStarts(delegationStarts, now),
+  };
 }

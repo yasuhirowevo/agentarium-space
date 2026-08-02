@@ -4,6 +4,7 @@ import {
   SPOTLIGHT_CALLOUT_LIMIT,
   spotlightDurationFor,
 } from './callout-policy.js';
+import { delegationVisualState, normalizeDelegationLinks } from './delegations.js';
 
 const STATUS_LABELS = {
   thinking: '考え中',
@@ -353,7 +354,7 @@ class WSClient {
       try {
         const message = JSON.parse(event.data);
         if (message.type === 'snapshot' && Array.isArray(message.sessions)) {
-          this.onSnapshot(message.sessions);
+          this.onSnapshot(message.sessions, Array.isArray(message.delegations) ? message.delegations : []);
         }
       } catch {
         // Ignore malformed or future protocol messages without breaking the live view.
@@ -394,6 +395,7 @@ class Store {
     this.toolRuns = new Map();
     this.reducedMotion = false;
     this.hasSnapshot = false;
+    this.delegations = [];
   }
 
   setReducedMotion(value) {
@@ -401,7 +403,7 @@ class Store {
     if (value) this.eventPops = [];
   }
 
-  applySnapshot(rawSessions) {
+  applySnapshot(rawSessions, rawDelegations = []) {
     const observedAt = Date.now();
     const normalizedSessions = rawSessions
       .filter((session) => session && typeof session.key === 'string' && session.key.length > 0)
@@ -451,6 +453,7 @@ class Store {
     this.prunePoolEvents(observedAt);
 
     this.sessionsByKey = nextByKey;
+    this.delegations = normalizeDelegationLinks(rawDelegations, nextByKey);
     this.hasSnapshot = true;
     return sessions;
   }
@@ -1264,6 +1267,7 @@ class Renderer {
     this.drawPools(ctx);
     this.drawOrbitRings(ctx);
     this.drawRelationships(ctx);
+    this.drawDelegationLinks(ctx);
     this.drawTrails(ctx);
     this.drawOrbs(ctx);
     this.drawRipples(ctx);
@@ -1691,6 +1695,50 @@ class Renderer {
       }
     }
     ctx.restore();
+  }
+
+  drawDelegationLinks(ctx) {
+    const now = Date.now();
+    for (const link of this.store.delegations) {
+      const parent = this.store.entities.get(link.parentKey);
+      const child = this.store.entities.get(link.childKey);
+      if (!parent || !child || parent.leaving || child.leaving) continue;
+      if (parent.opacity < 0.02 || child.opacity < 0.02) continue;
+      if (![parent.x, parent.y, child.x, child.y].every(Number.isFinite)) continue;
+
+      const visual = delegationVisualState(link, now, this.sim.reducedMotion);
+      const { fade } = visual;
+      if (fade <= 0) continue;
+      const opacity = Math.min(parent.opacity, child.opacity) * fade;
+      const parentColors = SOURCE_COLORS[parent.session.source] || SOURCE_COLORS.claude;
+      const childColors = SOURCE_COLORS[child.session.source] || SOURCE_COLORS.codex;
+      const gradient = ctx.createLinearGradient(parent.x, parent.y, child.x, child.y);
+      gradient.addColorStop(0, `rgba(${parentColors.rgb}, ${0.18 * opacity})`);
+      gradient.addColorStop(1, `rgba(${childColors.rgb}, ${0.22 * opacity})`);
+
+      ctx.save();
+      ctx.lineWidth = 0.85;
+      ctx.strokeStyle = gradient;
+      ctx.beginPath();
+      ctx.moveTo(parent.x, parent.y);
+      ctx.lineTo(child.x, child.y);
+      ctx.stroke();
+
+      if (visual.moving) {
+        const progress = (this.sim.time * 0.16 + seededUnit(link.id, 73)) % 1;
+        const x = parent.x + (child.x - parent.x) * progress;
+        const y = parent.y + (child.y - parent.y) * progress;
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = opacity * (0.32 + progress * 0.32);
+        ctx.fillStyle = childColors.core;
+        ctx.shadowColor = childColors.glow;
+        ctx.shadowBlur = 6;
+        ctx.beginPath();
+        ctx.arc(x, y, 1.15, 0, TAU);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
   }
 
   drawOrbs(ctx) {
@@ -2352,15 +2400,26 @@ class A11y {
     this.onSelect = onSelect;
   }
 
-  sync(sessions) {
+  sync(sessions, delegations = []) {
     const fragment = document.createDocumentFragment();
+    const relations = new Map();
+    for (const link of delegations) {
+      const direction = link.status === 'running' ? '委譲中' : '最近委譲';
+      const parentRelations = relations.get(link.parentKey) || [];
+      parentRelations.push(`${SOURCE_LABELS[link.childSource] || link.childSource}へ${direction}`);
+      relations.set(link.parentKey, parentRelations);
+      const childRelations = relations.get(link.childKey) || [];
+      childRelations.push(`${SOURCE_LABELS[link.parentSource] || link.parentSource}から${direction}`);
+      relations.set(link.childKey, childRelations);
+    }
     for (const session of sessions.slice().sort((left, right) => compareText(left.key, right.key))) {
       const item = document.createElement('li');
       const button = document.createElement('button');
       const source = SOURCE_LABELS[session.source] || session.source;
       const status = STATUS_LABELS[session.status] || session.status;
       button.type = 'button';
-      button.textContent = `${session.title}、${session.projectName}、${source}、${status}`;
+      const relation = (relations.get(session.key) || []).join('、');
+      button.textContent = `${session.title}、${session.projectName}、${source}、${status}${relation ? `、${relation}` : ''}`;
       button.addEventListener('click', () => this.onSelect(session.key));
       item.append(button);
       fragment.append(item);
@@ -2908,6 +2967,21 @@ class DetailPanel {
         done ? 'idle' : 'tool',
       ));
     }
+    for (const link of this.store.delegations.filter((candidate) => (
+      candidate.parentKey === session.key || candidate.childKey === session.key
+    ))) {
+      const outgoing = link.parentKey === session.key;
+      const otherKey = outgoing ? link.childKey : link.parentKey;
+      const other = this.store.sessionsByKey.get(otherKey);
+      if (!other) continue;
+      const direction = outgoing ? '委譲先' : '委譲元';
+      const state = link.status === 'running' ? '稼働中' : '直近の実行';
+      childList.append(this.createAgentNode(
+        `${direction}: ${other.title}${link.count > 1 ? ` ×${link.count}` : ''}`,
+        state,
+        link.status === 'running' ? 'tool' : 'idle',
+      ));
+    }
     if (childList.children.length) item.append(childList);
   }
 
@@ -3017,7 +3091,7 @@ class App {
     this.interaction = new Interaction(canvas, this.store, this.renderer, (key) => this.panel.toggle(key));
     this.a11y = new A11y(sessionList, (key) => this.panel.toggle(key));
     this.wsClient = new WSClient({
-      onSnapshot: (sessions) => this.onSnapshot(sessions),
+      onSnapshot: (sessions, delegations) => this.onSnapshot(sessions, delegations),
       onConnection: (connected) => this.setConnection(connected),
     });
     this.animationFrame = null;
@@ -3046,12 +3120,12 @@ class App {
     this.sim.resize(this.renderer.width, this.renderer.height);
   }
 
-  onSnapshot(rawSessions) {
+  onSnapshot(rawSessions, rawDelegations = []) {
     const previousSessions = this.store.sessionsByKey;
     const seedEvents = !this.store.hasSnapshot;
-    const sessions = this.store.applySnapshot(rawSessions);
+    const sessions = this.store.applySnapshot(rawSessions, rawDelegations);
     this.sim.syncSnapshot();
-    this.a11y.sync(sessions);
+    this.a11y.sync(sessions, this.store.delegations);
     this.hud.recordSnapshot(sessions, previousSessions, seedEvents);
     this.panel.refresh();
   }
