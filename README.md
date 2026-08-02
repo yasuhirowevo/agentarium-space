@@ -78,6 +78,7 @@ Environment variables:
 
 - `AGENTARIUM_PORT` — listening port (default: 41414)
 - `AGENTARIUM_WINDOW_MIN` — activity window to display, in minutes (default: 60)
+- `AGENTARIUM_DELEGATION_DIR` — absolute path for optional cross-provider delegation sidecars
 - `AGENTARIUM_DEBUG` — set to 1 to print parser and other debug logs to stderr
 
 ## Reading the display
@@ -87,6 +88,7 @@ Environment variables:
 - **Ripples + bright core** = a tool is running. Its name and target appear in the nameplate status line
 - **Breathing halo** = thinking / **medium glow** = waiting for input / **dimmed + closed eyes** = idle
 - **Orbiting smaller lights** = sub-agents. They orbit their parent and disappear in a particle burst when complete; a light traveling along the parent link indicates activity
+- **Thin warm-to-cool link** = a Claude Code ↔ Codex skill delegation. Both sessions remain full-size independent orbs; a slow light travels from caller to delegate while it is running
 - **Nameplate** = the session name and current activity (tool name: target and elapsed time). New messages appear as leader-line callouts
 - **Header HUD** = current time / status counts / SYNC (time since the last update) / events-per-minute sparkline / LINK status
 - **SECTOR label** = a project's tide pool (`SECTOR-A ─ NAME ─ N UNITS`). The full-height LIVE STREAM module shows recent activity
@@ -96,6 +98,7 @@ Environment variables:
 
 - Tails `~/.claude/projects/**/*.jsonl` and `~/.codex/sessions/**/*.jsonl` in
   **read-only** mode, builds session state, and sends it to the UI over WebSocket
+- The optional Claude/Codex wrapper integration writes short-lived local sidecars containing only a random link ID, child source/session ID, status, and timestamps. Prompts, working directories, and answers are never stored in these sidecars; invalid or unavailable sidecars are ignored
 - After launch, the app runs entirely locally: it listens only on 127.0.0.1,
   makes no outbound network requests, and sends no telemetry. Homebrew uses
   the network for installation and upgrades, but the app has no automatic

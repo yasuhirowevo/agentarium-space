@@ -4,6 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
+import { createDelegationReader, resolveDelegations } from './delegations.js';
 import { createClaudeWatcher } from './watchers/claude.js';
 import { createCodexWatcher } from './watchers/codex.js';
 
@@ -172,6 +173,7 @@ export async function startServer({
   uiRoot = defaultUiRoot,
   claudeRoot,
   codexRoot,
+  delegationRoot,
 } = {}) {
   let debounceTimer = null;
   let heartbeatTimer = null;
@@ -204,7 +206,10 @@ export async function startServer({
 
   function snapshot() {
     const at = Date.now();
-    return { type: 'snapshot', at, sessions: sessions(at) };
+    const activeSessions = sessions(at);
+    const starts = claude.getDelegationStarts(at).concat(codex.getDelegationStarts(at));
+    const delegations = resolveDelegations(delegationReader.getRecords(at), starts, activeSessions, at);
+    return { type: 'snapshot', at, sessions: activeSessions, delegations };
   }
 
   function broadcast() {
@@ -228,6 +233,40 @@ export async function startServer({
     onUpdate: scheduleBroadcast,
     ...(codexRoot === undefined ? {} : { root: codexRoot }),
   });
+  const delegationReader = createDelegationReader({
+    onUpdate: ({ phase } = {}) => {
+      void refreshDelegations(phase === 'running');
+    },
+    ...(delegationRoot === undefined ? {} : { root: delegationRoot }),
+  });
+  let refreshPromise = null;
+
+  function refreshDelegations(immediate = false) {
+    if (closed) return Promise.resolve();
+    const previous = refreshPromise ?? Promise.resolve();
+    const current = previous
+      .catch(() => {})
+      .then(async () => {
+        const now = Date.now();
+        const records = delegationReader.getRecords(now);
+        await Promise.allSettled([
+          claude.recoverDelegationStarts(records, now),
+          codex.recoverDelegationStarts(records, now),
+        ]);
+        if (closed) return;
+        if (immediate) {
+          clearTimeout(debounceTimer);
+          broadcast();
+        } else {
+          scheduleBroadcast();
+        }
+      })
+      .finally(() => {
+        if (refreshPromise === current) refreshPromise = null;
+      });
+    refreshPromise = current;
+    return current;
+  }
 
   wss.on('connection', (socket) => {
     socket.send(JSON.stringify(snapshot()));
@@ -251,6 +290,10 @@ export async function startServer({
     throw error;
   }
 
+  void delegationReader.start().catch((error) => {
+    if (process.env.AGENTARIUM_DEBUG) console.error('[server] delegation reader failed', error);
+  });
+
   heartbeatTimer = setInterval(broadcast, 15_000);
   const address = server.address();
   const actualPort = typeof address === 'object' && address ? address.port : port;
@@ -260,7 +303,8 @@ export async function startServer({
     closed = true;
     clearTimeout(debounceTimer);
     clearInterval(heartbeatTimer);
-    await Promise.allSettled([claude.close(), codex.close()]);
+    await Promise.allSettled([delegationReader.close(), claude.close(), codex.close()]);
+    if (refreshPromise) await refreshPromise.catch(() => {});
     for (const client of wss.clients) client.terminate();
     await new Promise((resolve) => wss.close(resolve));
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

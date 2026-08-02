@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -77,6 +77,16 @@ async function createWatcherRoots(prefix) {
   return { root, claudeRoot, codexRoot };
 }
 
+async function waitFor(predicate, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = predicate();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error('condition was not met before timeout');
+}
+
 test('startup token protects HTTP assets and WebSocket snapshots', async (t) => {
   const roots = await createWatcherRoots('agentarium-space-test-');
   const handle = await startServer({
@@ -148,10 +158,12 @@ test('startup token protects HTTP assets and WebSocket snapshots', async (t) => 
     });
     assert.equal(browserSnapshot.type, 'snapshot');
     assert.deepEqual(browserSnapshot.sessions, []);
+    assert.deepEqual(browserSnapshot.delegations, []);
 
     const nativeSnapshot = await receiveSnapshot(websocketUrl);
     assert.equal(nativeSnapshot.type, 'snapshot');
     assert.deepEqual(nativeSnapshot.sessions, []);
+    assert.deepEqual(nativeSnapshot.delegations, []);
   });
 
   await t.test('invalidates the old token after restart', async (restartTest) => {
@@ -171,4 +183,92 @@ test('startup token protects HTTP assets and WebSocket snapshots', async (t) => 
     const staleUrl = new URL(protectedUrl.pathname, nextUrl.origin);
     assert.equal((await fetch(staleUrl)).status, 403);
   });
+});
+
+test('publishes an explicit Claude to Codex delegation without changing native parentId', async (t) => {
+  const roots = await createWatcherRoots('agentarium-space-delegation-');
+  const delegationRoot = path.join(roots.root, 'delegations');
+  const claudeProject = path.join(roots.claudeRoot, 'project');
+  const now = Date.now();
+  const startedAt = now - 1_000;
+  const parentId = '22222222-2222-4222-8222-222222222222';
+  const childId = '11111111-1111-4111-8111-111111111111';
+  const linkId = 'agl_0123456789abcdefghijklmn';
+  const date = new Date(now);
+  const codexDirectory = path.join(
+    roots.codexRoot,
+    String(date.getFullYear()),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  );
+  await Promise.all([
+    mkdir(claudeProject, { recursive: true }),
+    mkdir(codexDirectory, { recursive: true }),
+    mkdir(delegationRoot, { recursive: true }),
+  ]);
+
+  const parentRecord = {
+    type: 'assistant',
+    timestamp: new Date(startedAt).toISOString(),
+    sessionId: parentId,
+    cwd: '/workspace/project',
+    message: {
+      content: [{
+        type: 'tool_use',
+        id: 'tool-1',
+        name: 'Bash',
+        input: {
+          command: `bash /Users/test/.claude/skills/codex/scripts/run-codex.sh /workspace/project /tmp/prompt --agentarium-link ${linkId}`,
+        },
+      }],
+    },
+  };
+  await writeFile(
+    path.join(claudeProject, `${parentId}.jsonl`),
+    `${JSON.stringify(parentRecord)}\n`,
+  );
+
+  const childRecords = [{
+    timestamp: new Date(startedAt + 100).toISOString(),
+    type: 'session_meta',
+    payload: { id: childId, cwd: '/workspace/project' },
+  }, {
+    timestamp: new Date(startedAt + 200).toISOString(),
+    type: 'event_msg',
+    payload: { type: 'task_started' },
+  }];
+  await writeFile(
+    path.join(codexDirectory, `rollout-2026-08-02T00-00-00-${childId}.jsonl`),
+    `${childRecords.map((record) => JSON.stringify(record)).join('\n')}\n`,
+  );
+  await writeFile(path.join(delegationRoot, `${linkId}.json`), JSON.stringify({
+    version: 1,
+    linkId,
+    childSource: 'codex',
+    childSessionId: childId,
+    status: 'running',
+    startedAt,
+    updatedAt: startedAt + 150,
+    expiresAt: now + 60_000,
+  }));
+
+  const handle = await startServer({
+    port: 0,
+    claudeRoot: roots.claudeRoot,
+    codexRoot: roots.codexRoot,
+    delegationRoot,
+  });
+  t.after(async () => {
+    await handle.close();
+    await rm(roots.root, { recursive: true, force: true });
+  });
+
+  const snapshot = await waitFor(() => {
+    const candidate = handle.getSnapshot();
+    return candidate.delegations.length ? candidate : null;
+  });
+  assert.equal(snapshot.delegations.length, 1);
+  assert.equal(snapshot.delegations[0].parentSource, 'claude');
+  assert.equal(snapshot.delegations[0].childSource, 'codex');
+  assert.equal(snapshot.sessions.find((session) => session.id === childId).parentId, null);
 });

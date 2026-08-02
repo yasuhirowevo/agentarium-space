@@ -245,3 +245,36 @@ test('publishes Codex commentary and completed reasoning summaries as progress',
     assert.equal(session.lastMessageAt, firstFinalAt);
   });
 });
+
+test('records a Codex parent from a raw custom-tool Claude wrapper marker', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentarium-codex-delegation-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const directory = path.join(root, '2026', '08', '02');
+  await mkdir(directory, { recursive: true });
+  const timestamp = new Date().toISOString();
+  const linkId = 'agl_0123456789abcdefghijklmn';
+  const command = `bash /Users/test/.agents/skills/claude/scripts/run-claude.sh /workspace/project /tmp/prompt --agentarium-link ${linkId}`;
+  const records = [{
+    timestamp,
+    type: 'session_meta',
+    payload: { id: SESSION_ID, cwd: '/workspace/project' },
+  }, {
+    timestamp,
+    type: 'response_item',
+    payload: {
+      type: 'custom_tool_call',
+      id: 'call-1',
+      name: 'exec_command',
+      input: `const result = await tools.exec_command({cmd:${JSON.stringify(command)}});`,
+    },
+  }];
+  const filePath = path.join(directory, `rollout-2026-08-02T00-00-00-${SESSION_ID}.jsonl`);
+  await writeFile(filePath, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
+
+  const watcher = createCodexWatcher({ root, windowMs: 60_000 });
+  await watcher.scan();
+  const starts = watcher.getDelegationStarts();
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].linkId, linkId);
+  assert.equal(starts[0].parentKey, path.resolve(filePath).replaceAll('\\', '/'));
+});

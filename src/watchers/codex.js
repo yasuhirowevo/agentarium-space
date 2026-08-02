@@ -2,6 +2,13 @@ import { readdir, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import chokidar from 'chokidar';
+import {
+  activeDelegationStarts,
+  codexDelegationCommand,
+  delegationLinkIdFromCommand,
+  recordDelegationStart,
+  recoverDelegationStartsFromFiles,
+} from '../delegations.js';
 import { JsonlTail } from '../tail.js';
 import {
   activeWindowMs,
@@ -57,7 +64,7 @@ function createIgnoredWatchPath(root) {
   };
 }
 
-async function findRecentLogs(root, now) {
+async function findRecentLogs(root, now, windowMs = INITIAL_FILE_WINDOW_MS) {
   const found = [];
 
   async function walk(directory, depth) {
@@ -75,7 +82,7 @@ async function findRecentLogs(root, now) {
       } else if (entry.isFile() && isSessionLog(filePath, root)) {
         try {
           const info = await stat(filePath);
-          if (now - info.mtimeMs <= INITIAL_FILE_WINDOW_MS) found.push(filePath);
+          if (now - info.mtimeMs <= windowMs) found.push(filePath);
         } catch (error) {
           debug(`could not stat ${filePath}`, error);
         }
@@ -277,7 +284,19 @@ function applySessionMeta(session, record, payload) {
   session.nickname = typeof spawn?.agent_nickname === 'string' ? spawn.agent_nickname : null;
 }
 
-function applyRecord(session, record, fileSessionId) {
+function delegationStartFromRecord(session, record, delegationStarts) {
+  if (record?.type !== 'response_item') return null;
+  const payload = record.payload && typeof record.payload === 'object' ? record.payload : {};
+  if (payload.type !== 'function_call' && payload.type !== 'custom_tool_call') return null;
+  const command = codexDelegationCommand(payload.arguments, payload.input);
+  const linkId = delegationLinkIdFromCommand(command, 'claude');
+  const startedAt = Date.parse(record.timestamp);
+  if (!linkId || !Number.isFinite(startedAt)) return null;
+  recordDelegationStart(delegationStarts, linkId, session.key, 'codex', startedAt);
+  return { linkId };
+}
+
+function applyRecord(session, record, fileSessionId, delegationStarts) {
   if (!record || typeof record !== 'object') return;
   const payload = record.payload && typeof record.payload === 'object' ? record.payload : {};
   if (record.type === 'session_meta' && !acceptsSessionMeta(session, payload, fileSessionId)) return;
@@ -317,6 +336,7 @@ function applyRecord(session, record, fileSessionId) {
 
   if (record.type !== 'response_item') return;
   const time = touchSession(session, record.timestamp);
+  delegationStartFromRecord(session, record, delegationStarts);
   if (payload.type === 'function_call' || payload.type === 'custom_tool_call') {
     const callId = payload.call_id ?? payload.id;
     if (typeof callId !== 'string') return;
@@ -377,6 +397,7 @@ export function createCodexWatcher({
   root = path.resolve(root);
   const tail = new JsonlTail();
   const sessions = new Map();
+  const delegationStarts = new Map();
   const fileQueues = new Map();
   let watcher = null;
 
@@ -409,7 +430,7 @@ export function createCodexWatcher({
           sessions.set(filePath, session);
         }
         for (const record of result.metaRecords) applyMetaRecord(session, record, fileSessionId);
-        for (const record of result.records) applyRecord(session, record, fileSessionId);
+        for (const record of result.records) applyRecord(session, record, fileSessionId, delegationStarts);
         if (result.metaRecords.length > 0 || result.records.length > 0 || result.reset) onUpdate();
       } catch (error) {
         debug(`could not process ${filePath}`, error);
@@ -421,6 +442,36 @@ export function createCodexWatcher({
     const files = await findRecentLogs(root, now);
     await runWithConcurrency(files, processFile);
     return getSessions(now);
+  }
+
+  function parseRecoveryRecord(record, filePath) {
+    const fileSessionId = rolloutUuid(filePath);
+    const session = sessions.get(filePath) ?? createSession(
+      fallbackId(filePath),
+      'codex',
+      normalizeCwd(path.resolve(filePath)),
+    );
+    if (record?.type === 'session_meta') {
+      const payload = record.payload && typeof record.payload === 'object' ? record.payload : {};
+      if (acceptsSessionMeta(session, payload, fileSessionId)) session.id = payload.id;
+    }
+    return delegationStartFromRecord(session, record, delegationStarts);
+  }
+
+  async function recoverDelegationStarts(records, now = Date.now()) {
+    const relevant = records
+      .filter((record) => record.childSource === 'claude')
+      .slice(0, 64);
+    const known = new Set(activeDelegationStarts(delegationStarts, now).map((start) => start.linkId));
+    const unresolved = relevant.filter((record) => !known.has(record.linkId));
+    if (unresolved.length === 0) return;
+    const earliest = Math.min(...unresolved.map((record) => record.startedAt));
+    const files = await findRecentLogs(root, now, Math.max(INITIAL_FILE_WINDOW_MS, now - earliest + 60_000));
+    await recoverDelegationStartsFromFiles({
+      files,
+      linkIds: unresolved.map((record) => record.linkId),
+      parseRecord: parseRecoveryRecord,
+    });
   }
 
   function getSessions(now = Date.now()) {
@@ -461,5 +512,13 @@ export function createCodexWatcher({
     watcher = null;
   }
 
-  return { scan, start, close, getSessions, sessions };
+  return {
+    scan,
+    start,
+    close,
+    getSessions,
+    sessions,
+    recoverDelegationStarts,
+    getDelegationStarts: (now = Date.now()) => activeDelegationStarts(delegationStarts, now),
+  };
 }

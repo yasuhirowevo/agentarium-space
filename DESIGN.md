@@ -126,6 +126,49 @@ UI 側（ui/office.js）:
 制約: v2.13 の描画順・衝突回避・fillText・expLerp・reduced-motion をそのまま使う。
 新しい常設要素、背景ボックス、点滅、レイアウト再配置は追加しない。
 
+## 異種エージェント委譲リンク（v2.19 — Claude Code ↔ Codex）
+
+Claude Code から Codex、または Codex から Claude Code を専用 skill wrapper で起動した場合、
+呼び出し元と呼び出し先を **execution link** として関連付ける。これは provider が記録する native
+sub-agent 階層とは別の一時的な実行関係であり、`session.parentId` や Satellite 配置へ変換しない。
+
+コア側（watchers + delegations.js + server.js）:
+
+1. **明示 link marker**: wrapper 呼び出しコマンドに
+   `--agentarium-link <linkId>` を付ける。`linkId` は `agl_` で始まる URL-safe なランダム ID とし、
+   Claude watcher は Bash の Codex wrapper、Codex watcher は shell/custom tool の Claude wrapperだけを
+   allowlist して親 `session.key` と開始時刻を記録する。cwd や近接時刻だけの推測は行わない
+2. **子 sidecar**: wrapper は子 session ID が判明した時点で、専用のユーザー状態ディレクトリへ
+   version 1 JSON を atomic rename で書く。保存項目は `linkId / childSource / childSessionId /
+   status / startedAt / updatedAt / expiresAt|endedAt` に限定し、prompt・cwd・回答・token・親 ID は保存しない
+3. **共有 root**: `AGENTARIUM_DELEGATION_DIR` の絶対パスを優先し、未設定時は Node の
+   `path.join(os.homedir(), '.agentarium-space', 'delegations-v1')` を使う。wrapper も Node helper で
+   同じ規則を評価し、Git Bash の `/tmp` と Windows Node の temp path 差へ依存しない
+4. **厳格検証と fail-open**: regular file・最大サイズ・schema・enum・ID・時刻順序・寿命を検証し、
+   symlink と不正 JSON は無視する。sidecar directory の作成・scan・watch・parse・cleanup が失敗しても
+   Claude/Codex watcher、loopback server、AI wrapper 本来の終了コードを妨げない
+5. **endpoint 解決**: 親は marker を読んだログの `session.key` を使う。子は同じ source/session ID の
+   うち sidecar の実行時間帯に実レコードが更新された `session.key` を使い、候補が一意でない場合は
+   link を公開しない。resume により同じ session ID が複数ログへ現れることを許容する
+6. **配信**: snapshot の既存 `sessions` は変更せず、top-level `delegations` を追加する。
+   新しい running link の観測時は通常の 1 秒 debounce を待たず配信する。短時間実行や接続前完了では
+   running frame を保証せず、terminal link だけを表示してよい
+7. **寿命と上限**: running は `expiresAt` まで、`complete / failed / timed_out` は `endedAt` から
+   60 秒だけ公開する。復元対象 link と表示 endpoint pair は別上限とし、表示は新しい running を優先して
+   最大 8 pair とする
+
+UI 側（ui/office.js）:
+
+8. **非構造 relationship**: 両 endpoint を通常サイズの orb として既存位置に保ち、pool・sector・
+   pairwise separation・native orbit を変更せず細い低 alpha 線で結ぶ。running 中だけ親から子へ
+   低速の光点を流し、terminal は静的にフェードする。`prefers-reduced-motion` では光点を止める
+9. **重複抑制**: 同じ親子 endpoint pair の連続 resume はデータ上の link を保持しつつ描画時に 1 本へ
+   集約する。Canvas にラベルや背景ボックスを追加せず、選択中の AGENT TREE と visually-hidden list に
+   非再帰の関係行を追加する
+
+回帰検証では両方向の new/resume、同一 session ID の複数ログ、短時間完了、破損・期限切れ sidecar、
+reader 起動中 close、巨大ログ中央の marker 復元、reduced-motion、native Satellite 非変更を確認する。
+
 ## 原則
 
 - **読み取り専用**: ログファイルへの書き込み・改変・削除は一切しない
