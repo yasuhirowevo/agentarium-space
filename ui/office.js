@@ -63,6 +63,9 @@ const POOL_EVENT_WINDOW_MS = 60 * 1000;
 const EVENT_WINDOW_MS = 15 * 60 * 1000;
 const LONG_RUN_MS = 10 * 60 * 1000;
 const GLOBAL_EVENT_LIMIT = 20;
+const WAITING_EFFECT_LIMIT = 8;
+const WAITING_RIPPLE_DURATION = 2.8;
+const WAITING_EXHALE_DURATION = 2.2;
 
 const canvas = document.querySelector('#bay-canvas');
 const canvasRegion = document.querySelector('#canvas-region');
@@ -398,7 +401,13 @@ class Store {
 
   setReducedMotion(value) {
     this.reducedMotion = value;
-    if (value) this.eventPops = [];
+    if (value) {
+      this.eventPops = [];
+      for (const entity of this.entities.values()) {
+        entity.pendingWaitingRipple = false;
+        entity.waitingExhaleAge = null;
+      }
+    }
   }
 
   applySnapshot(rawSessions) {
@@ -408,6 +417,7 @@ class Store {
       .map(normalizedSession);
     const sessions = disambiguateSessionTitles(normalizedSessions);
     const nextByKey = new Map();
+    let waitingEffectCount = 0;
 
     for (const session of sessions) {
       this.recordPoolEvents(session, this.sessionsByKey.get(session.key), observedAt);
@@ -421,6 +431,21 @@ class Store {
         this.entities.set(session.key, entity);
         this.emitSpotlightCallout(null, session, observedAt);
       } else {
+        if (session.status !== 'waiting') {
+          entity.pendingWaitingRipple = false;
+          entity.waitingExhaleAge = null;
+        }
+        const enteredWaiting = !entity.leaving
+          && entity.session.status !== 'waiting'
+          && session.status === 'waiting';
+        if (!this.reducedMotion
+          && enteredWaiting
+          && waitingEffectCount < WAITING_EFFECT_LIMIT
+        ) {
+          entity.pendingWaitingRipple = true;
+          entity.waitingExhaleAge = 0;
+          waitingEffectCount += 1;
+        }
         if (entity.session.lastActivity !== session.lastActivity) entity.pendingActivityRipple = true;
         this.emitEventPop(entity, entity.session.recentEvents, session.recentEvents);
         this.emitSpotlightCallout(entity.session, session, observedAt);
@@ -440,6 +465,8 @@ class Store {
       } else {
         entity.leaving = true;
         entity.targetOpacity = 0;
+        entity.pendingWaitingRipple = false;
+        entity.waitingExhaleAge = null;
       }
     }
     for (const key of this.statusHistory.keys()) {
@@ -607,6 +634,8 @@ class Store {
       blinkOffset: seededUnit(session.key, 5) * 9,
       nextToolRipple: 0,
       pendingActivityRipple: false,
+      pendingWaitingRipple: false,
+      waitingExhaleAge: null,
       leaving: false,
       sparks: new Map(),
       completedSparks: new Set(),
@@ -976,6 +1005,7 @@ class Sim {
       entity.brightness = expLerp(entity.brightness, entity.targetBrightness, deltaTime, 0.48);
 
       this.updateEntityRipples(entity);
+      this.updateWaitingExhale(entity, deltaTime);
       this.updateSparks(entity, deltaTime);
     };
 
@@ -1045,11 +1075,24 @@ class Sim {
   updateEntityRipples(entity) {
     if (this.reducedMotion || entity.leaving) {
       entity.pendingActivityRipple = false;
+      entity.pendingWaitingRipple = false;
       return;
     }
     if (entity.pendingActivityRipple) {
       this.emitRipple(entity, 0.9);
       entity.pendingActivityRipple = false;
+    }
+    if (entity.pendingWaitingRipple) {
+      if (entity.session.status === 'waiting') {
+        this.emitRipple(entity, 1, {
+          duration: WAITING_RIPPLE_DURATION,
+          expansion: 100,
+          lineWidth: 1.4,
+          alpha: 0.3,
+          fadePower: 2,
+        });
+      }
+      entity.pendingWaitingRipple = false;
     }
     if (entity.session.status !== 'tool') {
       entity.nextToolRipple = this.time + 2.5;
@@ -1062,17 +1105,31 @@ class Sim {
     }
   }
 
-  emitRipple(entity, strength) {
+  emitRipple(entity, strength, options = {}) {
     if (!Number.isFinite(entity.x) || !Number.isFinite(entity.y)) return;
     this.ripples.push({
       x: entity.x,
       y: entity.y,
       radius: entity.baseRadius * entity.scale,
       age: 0,
-      duration: 1.25,
+      duration: options.duration ?? 1.25,
+      expansion: options.expansion ?? 38,
+      lineWidth: options.lineWidth ?? 0.8,
+      alpha: options.alpha ?? 0.38,
+      fadePower: options.fadePower ?? 1,
       strength,
       source: entity.session.source,
     });
+  }
+
+  updateWaitingExhale(entity, deltaTime) {
+    if (this.reducedMotion || entity.leaving || entity.session.status !== 'waiting') {
+      entity.waitingExhaleAge = null;
+      return;
+    }
+    if (!Number.isFinite(entity.waitingExhaleAge)) return;
+    entity.waitingExhaleAge += deltaTime;
+    if (entity.waitingExhaleAge >= WAITING_EXHALE_DURATION) entity.waitingExhaleAge = null;
   }
 
   updateSparks(entity, deltaTime) {
@@ -1728,6 +1785,13 @@ class Renderer {
     const breathing = entity.session.status === 'thinking' && !this.sim.reducedMotion
       ? 1 + 0.075 * (1 + Math.sin(this.sim.time * TAU / 2.8))
       : 1;
+    const exhale = entity.session.status === 'waiting'
+      && !this.sim.reducedMotion
+      && Number.isFinite(entity.waitingExhaleAge)
+      ? 1 + 0.22 * Math.sin(
+        Math.PI * clamp(entity.waitingExhaleAge / WAITING_EXHALE_DURATION, 0, 1),
+      )
+      : 1;
     const idlePulse = entity.session.status === 'idle' && !this.sim.reducedMotion
       ? Math.max(0, Math.cos((this.sim.time + entity.phase) * TAU / 8)) ** 18 * 0.16
       : 0;
@@ -1740,7 +1804,7 @@ class Renderer {
 
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    const haloRadius = radius * 2 * breathing;
+    const haloRadius = radius * 2 * breathing * exhale;
     const halo = ctx.createRadialGradient(entity.x, entity.y, radius * 0.2, entity.x, entity.y, haloRadius);
     halo.addColorStop(0, `rgba(${colors.rgb}, ${0.2 * brightness})`);
     halo.addColorStop(0.35, `rgba(${colors.rgb}, ${0.12 * brightness})`);
@@ -2024,11 +2088,11 @@ class Renderer {
     for (const ripple of this.sim.ripples) {
       const progress = ripple.age / ripple.duration;
       const colors = SOURCE_COLORS[ripple.source] || SOURCE_COLORS.codex;
-      ctx.globalAlpha = (1 - progress) * 0.38 * ripple.strength;
+      ctx.globalAlpha = (1 - progress) ** ripple.fadePower * ripple.alpha * ripple.strength;
       ctx.strokeStyle = colors.core;
-      ctx.lineWidth = 0.8;
+      ctx.lineWidth = ripple.lineWidth;
       ctx.beginPath();
-      ctx.arc(ripple.x, ripple.y, ripple.radius + progress * 38, 0, TAU);
+      ctx.arc(ripple.x, ripple.y, ripple.radius + progress * ripple.expansion, 0, TAU);
       ctx.stroke();
     }
     ctx.restore();
