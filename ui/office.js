@@ -65,6 +65,7 @@ const LONG_RUN_MS = 10 * 60 * 1000;
 const GLOBAL_EVENT_LIMIT = 20;
 const WAITING_EFFECT_LIMIT = 8;
 const WAITING_RIPPLE_DURATION = 2.8;
+const WAITING_RIPPLE_DELAY = 0.5;
 const WAITING_EXHALE_DURATION = 2.2;
 
 const canvas = document.querySelector('#bay-canvas');
@@ -404,8 +405,9 @@ class Store {
     if (value) {
       this.eventPops = [];
       for (const entity of this.entities.values()) {
-        entity.pendingWaitingRipple = false;
+        entity.waitingRippleBursts = [];
         entity.waitingExhaleAge = null;
+        entity.waitingBrightnessHold = null;
       }
     }
   }
@@ -432,8 +434,8 @@ class Store {
         this.emitSpotlightCallout(null, session, observedAt);
       } else {
         if (session.status !== 'waiting') {
-          entity.pendingWaitingRipple = false;
           entity.waitingExhaleAge = null;
+          entity.waitingBrightnessHold = null;
         }
         const enteredWaiting = !entity.leaving
           && entity.session.status !== 'waiting'
@@ -442,8 +444,9 @@ class Store {
           && enteredWaiting
           && waitingEffectCount < WAITING_EFFECT_LIMIT
         ) {
-          entity.pendingWaitingRipple = true;
+          entity.waitingRippleBursts.push({ delay: null });
           entity.waitingExhaleAge = 0;
+          entity.waitingBrightnessHold = entity.brightness;
           waitingEffectCount += 1;
         }
         if (entity.session.lastActivity !== session.lastActivity) entity.pendingActivityRipple = true;
@@ -465,8 +468,9 @@ class Store {
       } else {
         entity.leaving = true;
         entity.targetOpacity = 0;
-        entity.pendingWaitingRipple = false;
+        entity.waitingRippleBursts = [];
         entity.waitingExhaleAge = null;
+        entity.waitingBrightnessHold = null;
       }
     }
     for (const key of this.statusHistory.keys()) {
@@ -634,8 +638,9 @@ class Store {
       blinkOffset: seededUnit(session.key, 5) * 9,
       nextToolRipple: 0,
       pendingActivityRipple: false,
-      pendingWaitingRipple: false,
+      waitingRippleBursts: [],
       waitingExhaleAge: null,
+      waitingBrightnessHold: null,
       leaving: false,
       sparks: new Map(),
       completedSparks: new Set(),
@@ -1002,10 +1007,16 @@ class Sim {
       entity.y = expLerp(entity.y, entity.targetY, deltaTime, status === 'waiting' ? 0.82 : 0.6);
       entity.opacity = expLerp(entity.opacity, entity.targetOpacity, deltaTime, 0.5);
       entity.scale = expLerp(entity.scale, entity.targetScale, deltaTime);
-      entity.brightness = expLerp(entity.brightness, entity.targetBrightness, deltaTime, 0.48);
-
-      this.updateEntityRipples(entity);
       this.updateWaitingExhale(entity, deltaTime);
+      if (Number.isFinite(entity.waitingExhaleAge)
+        && Number.isFinite(entity.waitingBrightnessHold)
+      ) {
+        entity.brightness = entity.waitingBrightnessHold;
+      } else {
+        entity.brightness = expLerp(entity.brightness, entity.targetBrightness, deltaTime, 0.48);
+      }
+
+      this.updateEntityRipples(entity, deltaTime);
       this.updateSparks(entity, deltaTime);
     };
 
@@ -1072,28 +1083,30 @@ class Sim {
     }
   }
 
-  updateEntityRipples(entity) {
+  updateEntityRipples(entity, deltaTime) {
     if (this.reducedMotion || entity.leaving) {
       entity.pendingActivityRipple = false;
-      entity.pendingWaitingRipple = false;
+      entity.waitingRippleBursts = [];
       return;
     }
     if (entity.pendingActivityRipple) {
       this.emitRipple(entity, 0.9);
       entity.pendingActivityRipple = false;
     }
-    if (entity.pendingWaitingRipple) {
-      if (entity.session.status === 'waiting') {
-        this.emitRipple(entity, 1, {
-          duration: WAITING_RIPPLE_DURATION,
-          expansion: 100,
-          lineWidth: 1.4,
-          alpha: 0.3,
-          fadePower: 2,
-        });
+    for (const burst of entity.waitingRippleBursts) {
+      if (!Number.isFinite(burst.delay)) {
+        this.emitWaitingRipple(entity);
+        burst.delay = WAITING_RIPPLE_DELAY;
+        continue;
       }
-      entity.pendingWaitingRipple = false;
+      burst.delay -= deltaTime;
+      if (burst.delay <= 0) {
+        this.emitWaitingRipple(entity);
+        burst.complete = true;
+      }
     }
+    entity.waitingRippleBursts = entity.waitingRippleBursts
+      .filter((burst) => !burst.complete);
     if (entity.session.status !== 'tool') {
       entity.nextToolRipple = this.time + 2.5;
       return;
@@ -1103,6 +1116,16 @@ class Sim {
       this.emitRipple(entity, 1);
       entity.nextToolRipple = this.time + 2.5;
     }
+  }
+
+  emitWaitingRipple(entity) {
+    this.emitRipple(entity, 1, {
+      duration: WAITING_RIPPLE_DURATION,
+      expansion: 100,
+      lineWidth: 2,
+      alpha: 0.5,
+      envelope: 'midPeak',
+    });
   }
 
   emitRipple(entity, strength, options = {}) {
@@ -1117,6 +1140,7 @@ class Sim {
       lineWidth: options.lineWidth ?? 0.8,
       alpha: options.alpha ?? 0.38,
       fadePower: options.fadePower ?? 1,
+      envelope: options.envelope ?? 'fade',
       strength,
       source: entity.session.source,
     });
@@ -1125,11 +1149,18 @@ class Sim {
   updateWaitingExhale(entity, deltaTime) {
     if (this.reducedMotion || entity.leaving || entity.session.status !== 'waiting') {
       entity.waitingExhaleAge = null;
+      entity.waitingBrightnessHold = null;
       return;
     }
-    if (!Number.isFinite(entity.waitingExhaleAge)) return;
+    if (!Number.isFinite(entity.waitingExhaleAge)) {
+      entity.waitingBrightnessHold = null;
+      return;
+    }
     entity.waitingExhaleAge += deltaTime;
-    if (entity.waitingExhaleAge >= WAITING_EXHALE_DURATION) entity.waitingExhaleAge = null;
+    if (entity.waitingExhaleAge >= WAITING_EXHALE_DURATION) {
+      entity.waitingExhaleAge = null;
+      entity.waitingBrightnessHold = null;
+    }
   }
 
   updateSparks(entity, deltaTime) {
@@ -2088,7 +2119,10 @@ class Renderer {
     for (const ripple of this.sim.ripples) {
       const progress = ripple.age / ripple.duration;
       const colors = SOURCE_COLORS[ripple.source] || SOURCE_COLORS.codex;
-      ctx.globalAlpha = (1 - progress) ** ripple.fadePower * ripple.alpha * ripple.strength;
+      const envelope = ripple.envelope === 'midPeak'
+        ? Math.sin(Math.PI * progress)
+        : (1 - progress) ** ripple.fadePower;
+      ctx.globalAlpha = envelope * ripple.alpha * ripple.strength;
       ctx.strokeStyle = colors.core;
       ctx.lineWidth = ripple.lineWidth;
       ctx.beginPath();
