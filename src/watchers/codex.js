@@ -372,6 +372,7 @@ function applyRecord(session, record, fileSessionId) {
   if (record.type === 'turn_context') {
     touchSession(session, record.timestamp);
     if (typeof payload.cwd === 'string') session.cwd = normalizeCwd(payload.cwd);
+    if (typeof payload.turn_id === 'string') session.codexTurnId = payload.turn_id;
     return;
   }
 
@@ -498,7 +499,7 @@ export function createCodexWatcher({
           const context = await readLatestJsonlRecord(filePath, (record) => record?.type === 'turn_context');
           // Only turn metadata is recovered. The skipped history must not replay
           // old tools, usage notifications, or task transitions.
-          if (context) applyMetaRecord(session, context, fileSessionId);
+          if (context) applyRecord(session, context, fileSessionId);
         }
         for (const record of result.records) applyRecord(session, record, fileSessionId);
         if (result.metaRecords.length > 0 || result.records.length > 0 || result.reset) onUpdate();

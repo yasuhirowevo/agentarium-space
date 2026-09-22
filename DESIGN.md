@@ -137,7 +137,8 @@ UI 側（ui/office.js）:
 - Codex の `turn_aborted` は実行中ターンとその pending tools を終了させる。
   ターン ID がある場合は別ターンの終了通知で現在の作業を終了させない
 - Codex の初回読み取りで `turn_context` が末尾の読取範囲に存在しない場合は、
-  追加読取量を最大 8MiB に制限して末尾側から最新の `turn_context` を探し、モデル・権限・cwd を回収する。
+  追加読取量を最大 8MiB に制限して末尾側から最新の `turn_context` を探し、モデル・権限・cwd と
+  終了通知の照合用ターン ID を回収する。
   この回収はメタ情報だけに適用し、古いツール呼び出し・使用量・状態遷移は再生しない
 - Claude の Agent / Task の非同期起動応答（`isAsync` / `async_launched`）は sub-agent の完了にしない。
   起動応答の agent ID と実際の完了通知を対応させて running / done を更新する。

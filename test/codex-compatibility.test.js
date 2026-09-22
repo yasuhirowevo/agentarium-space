@@ -269,3 +269,31 @@ test('distinct messages sharing an excerpt still update the current speech', asy
   assert.equal(session.lastMessage, 'Checking the current project and its compatibility with logs');
   assert.equal(session.lastMessageAt, Date.parse(current.timestamp));
 });
+
+for (const location of ['tail', 'recovered']) {
+  test(`uses latest turn context identity to reject stale termination (${location})`, async (t) => {
+    const f = await fixture(t);
+    await f.append([
+      f.record('turn_context', { turn_id: 'previous-turn', model: 'previous-model' }),
+      f.record('unknown_record', { padding: 'x'.repeat(150_000) }),
+      f.event({ type: 'task_started', turn_id: 'current-turn' }),
+      ...(location === 'tail' ? [f.record('unknown_record', { padding: 'x'.repeat(300_000) })] : []),
+      f.record('turn_context', { turn_id: 'current-turn', model: 'current-model' }),
+      ...(location === 'recovered' ? [f.record('unknown_record', { padding: 'x'.repeat(300_000) })] : []),
+      f.response({ type: 'function_call', call_id: 'current-call', name: 'exec_command' }),
+    ]);
+    const initial = await f.scan();
+    assert.equal(initial.model, 'current-model');
+    assert.equal(initial.status, 'tool');
+    await f.append([
+      f.event({ type: 'turn_aborted', turn_id: 'previous-turn' }),
+      f.event({ type: 'task_complete', turn_id: 'previous-turn' }),
+    ]);
+    const session = await f.scan();
+    assert.equal(session.status, 'tool');
+    assert.equal(session.activity, 'exec_command');
+    assert.deepEqual(session.recentEvents, initial.recentEvents);
+    await f.append([f.event({ type: 'turn_aborted', turn_id: 'current-turn' })]);
+    assert.equal((await f.scan()).status, 'waiting');
+  });
+}
