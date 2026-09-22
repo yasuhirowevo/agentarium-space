@@ -1,4 +1,5 @@
 import { contextLabel, contextUsage } from './context-metrics.js';
+import { activityMotionFor } from './activity-motion.js';
 import { assignmentLabel, codexDetailReadout } from './codex-details.js';
 import {
   normalizeMessageKind,
@@ -425,6 +426,7 @@ class Store {
       }
 
       entity.session = session;
+      entity.motionKind = activityMotionFor(session);
       entity.poolKey = projectKey(session);
       entity.leaving = false;
       entity.targetOpacity = 1;
@@ -605,6 +607,9 @@ class Store {
       blinkOffset: seededUnit(session.key, 5) * 9,
       nextToolRipple: 0,
       pendingActivityRipple: false,
+      motionKind: activityMotionFor(session),
+      motionWeights: { thinking: 0, reading: 0, writing: 0 },
+      connectionActivity: 0,
       leaving: false,
       sparks: new Map(),
       completedSparks: new Set(),
@@ -630,6 +635,7 @@ class Store {
           x: entity.x,
           y: entity.y,
           opacity: 0,
+          activityGlow: 0,
           history: [],
           retiring: false,
           burst: false,
@@ -972,6 +978,17 @@ class Sim {
       entity.opacity = expLerp(entity.opacity, entity.targetOpacity, deltaTime, 0.5);
       entity.scale = expLerp(entity.scale, entity.targetScale, deltaTime);
       entity.brightness = expLerp(entity.brightness, entity.targetBrightness, deltaTime, 0.48);
+      for (const kind of Object.keys(entity.motionWeights)) {
+        const target = !entity.leaving && entity.motionKind === kind ? 1 : 0;
+        entity.motionWeights[kind] = this.reducedMotion
+          ? target
+          : expLerp(entity.motionWeights[kind], target, deltaTime, 0.35);
+      }
+      const activeConnection = entity.isSatellite && !entity.leaving
+        && (status === 'thinking' || status === 'tool') ? 1 : 0;
+      entity.connectionActivity = this.reducedMotion
+        ? activeConnection
+        : expLerp(entity.connectionActivity, activeConnection, deltaTime, 0.35);
 
       this.updateEntityRipples(entity);
       this.updateSparks(entity, deltaTime);
@@ -1049,7 +1066,8 @@ class Sim {
       this.emitRipple(entity, 0.9);
       entity.pendingActivityRipple = false;
     }
-    if (entity.session.status !== 'tool') {
+    if (entity.session.status !== 'tool'
+      || entity.motionKind === 'reading' || entity.motionKind === 'writing') {
       entity.nextToolRipple = this.time + 2.5;
       return;
     }
@@ -1082,6 +1100,10 @@ class Sim {
       spark.y = entity.y + Math.sin(angle) * radius * 0.68;
       const targetOpacity = spark.retiring || spark.status === 'done' ? 0 : entity.opacity;
       spark.opacity = expLerp(spark.opacity, targetOpacity, deltaTime, 0.28);
+      const active = spark.status === 'running' && !spark.retiring && !entity.leaving ? 1 : 0;
+      spark.activityGlow = this.reducedMotion
+        ? active
+        : expLerp(spark.activityGlow, active, deltaTime, 0.35);
 
       if (!this.reducedMotion && spark.status !== 'done' && !spark.retiring) {
         spark.history.push({ x: spark.x, y: spark.y });
@@ -1564,14 +1586,15 @@ class Renderer {
     for (const entity of this.store.entities.values()) {
       if (entity.opacity < 0.02) continue;
       if (!Number.isFinite(entity.x) || !Number.isFinite(entity.y)) continue;
-      if (entity.session.status === 'thinking' && !this.sim.reducedMotion) {
-        this.drawThinkingMotes(ctx, entity);
+      if (!this.sim.reducedMotion) {
+        if (entity.motionWeights.thinking > 0.01) this.drawThinkingMotes(ctx, entity);
+        this.drawToolMotes(ctx, entity);
       }
       for (const spark of entity.sparks.values()) {
         spark.history.forEach((point, index) => {
           if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
           const progress = (index + 1) / Math.max(1, spark.history.length);
-          ctx.globalAlpha = entity.opacity * progress * 0.12;
+          ctx.globalAlpha = spark.opacity * progress * (0.12 + spark.activityGlow * 0.1);
           ctx.fillStyle = '#ffc9a3';
           ctx.beginPath();
           ctx.arc(point.x, point.y, 0.7 + progress * 1.2, 0, TAU);
@@ -1599,7 +1622,7 @@ class Renderer {
       const phase = this.sim.time * (0.42 + index * 0.05) + entity.phase + index * 2.1;
       const progress = ((this.sim.time * 0.18 + seededUnit(entity.key, index + 20)) % 1);
       const distance = entity.baseRadius * (2.2 - progress * 1.35);
-      ctx.globalAlpha = entity.opacity * (0.15 + progress * 0.28);
+      ctx.globalAlpha = entity.opacity * entity.motionWeights.thinking * (0.1 + progress * 0.18);
       ctx.fillStyle = colors.core;
       ctx.beginPath();
       ctx.arc(
@@ -1610,6 +1633,46 @@ class Renderer {
         TAU,
       );
       ctx.fill();
+    }
+  }
+
+  drawToolMotes(ctx, entity) {
+    const colors = SOURCE_COLORS[entity.session.source] || SOURCE_COLORS.codex;
+    const radius = entity.baseRadius * entity.scale;
+    for (const kind of ['reading', 'writing']) {
+      const weight = entity.motionWeights[kind];
+      if (weight < 0.01) continue;
+      const reading = kind === 'reading';
+      for (let index = 0; index < 3; index += 1) {
+        const progress = (this.sim.time / 3.8 + index / 3 + seededUnit(entity.key, 50)) % 1;
+        const angle = entity.phase + index * TAU / 3;
+        const distance = radius * (reading ? 2.3 - progress * 1.2 : 1.08 + progress * 1.22);
+        const dx = Math.cos(angle);
+        const dy = Math.sin(angle) * 0.72;
+        const x = entity.x + dx * distance;
+        const y = entity.y + dy * distance;
+        const alpha = entity.opacity * weight * Math.sin(progress * Math.PI) * 0.85;
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = colors.core;
+        if (!reading) {
+          const tail = radius * 0.45 * Math.sin(progress * Math.PI);
+          const startX = x - dx * tail;
+          const startY = y - dy * tail;
+          const trail = ctx.createLinearGradient(startX, startY, x, y);
+          trail.addColorStop(0, `rgba(${colors.rgb}, 0)`);
+          trail.addColorStop(1, colors.core);
+          ctx.strokeStyle = trail;
+          ctx.lineWidth = 1.4 * entity.scale;
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.moveTo(startX, startY);
+          ctx.lineTo(x, y);
+          ctx.stroke();
+        }
+        ctx.beginPath();
+        ctx.arc(x, y, (reading ? 1.7 : 1.3) * entity.scale, 0, TAU);
+        ctx.fill();
+      }
     }
   }
 
@@ -1659,13 +1722,13 @@ class Renderer {
       const colors = SOURCE_COLORS[entity.session.source] || SOURCE_COLORS.codex;
       const familyEmphasis = Math.max(entity.familyEmphasis, parent.familyEmphasis);
       ctx.globalAlpha = Math.min(entity.opacity, parent.opacity);
-      ctx.strokeStyle = `rgba(${colors.rgb}, ${0.14 + familyEmphasis * 0.26})`;
+      ctx.strokeStyle = `rgba(${colors.rgb}, ${0.14 + familyEmphasis * 0.26 + entity.connectionActivity * 0.1})`;
       ctx.beginPath();
       ctx.moveTo(parent.x, parent.y);
       ctx.lineTo(entity.x, entity.y);
       ctx.stroke();
 
-      if (!this.sim.reducedMotion && ['thinking', 'tool'].includes(entity.session.status)) {
+      if (!this.sim.reducedMotion && entity.connectionActivity > 0.01) {
         const pointCount = 2 + Math.floor(seededUnit(entity.key, 41) * 2);
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
@@ -1673,13 +1736,14 @@ class Renderer {
         ctx.shadowColor = colors.glow;
         ctx.shadowBlur = 7;
         for (let index = 0; index < pointCount; index += 1) {
-          const progress = (this.sim.time * 0.38 + index / pointCount + seededUnit(entity.key, 42)) % 1;
-          ctx.globalAlpha = Math.min(entity.opacity, parent.opacity) * (0.32 + progress * 0.46);
+          const progress = (this.sim.time * 0.22 + index / pointCount + seededUnit(entity.key, 42)) % 1;
+          ctx.globalAlpha = Math.min(entity.opacity, parent.opacity) * entity.connectionActivity
+            * Math.sin(progress * Math.PI) * 0.9;
           ctx.beginPath();
           ctx.arc(
             parent.x + (entity.x - parent.x) * progress,
             parent.y + (entity.y - parent.y) * progress,
-            1.1 + progress * 0.7,
+            1.5 + Math.sin(progress * Math.PI) * 0.6,
             0,
             TAU,
           );
@@ -1705,7 +1769,7 @@ class Renderer {
         ctx.globalAlpha = spark.opacity * 0.9;
         ctx.fillStyle = '#ffc9a3';
         ctx.shadowColor = '#ff8a5c';
-        ctx.shadowBlur = 10;
+        ctx.shadowBlur = 10 + spark.activityGlow * 4;
         ctx.beginPath();
         ctx.arc(spark.x, spark.y, 3.5, 0, TAU);
         ctx.fill();
@@ -1723,8 +1787,8 @@ class Renderer {
     if (!Number.isFinite(entity.x) || !Number.isFinite(entity.y)) return;
     const colors = SOURCE_COLORS[entity.session.source] || SOURCE_COLORS.codex;
     const hovered = this.hoveredKey === entity.key;
-    const breathing = entity.session.status === 'thinking' && !this.sim.reducedMotion
-      ? 1 + 0.075 * (1 + Math.sin(this.sim.time * TAU / 2.8))
+    const breathing = !this.sim.reducedMotion
+      ? 1 + entity.motionWeights.thinking * 0.075 * (1 + Math.sin(this.sim.time * TAU / 2.8))
       : 1;
     const idlePulse = entity.session.status === 'idle' && !this.sim.reducedMotion
       ? Math.max(0, Math.cos((this.sim.time + entity.phase) * TAU / 8)) ** 18 * 0.16
