@@ -321,6 +321,14 @@ function applyRichFields(session, record, payload) {
     session.originator = payload.originator;
   }
   if (record.type === 'turn_context') {
+    if (typeof payload.turn_id === 'string' && payload.turn_id !== session.codexContextTurnId) {
+      // Head metadata and recovered context can identify a new usage epoch even
+      // when its task_started record was outside the bounded read.
+      if (payload.turn_id !== session.codexTurnId) {
+        session.codexTurnSequence = (session.codexTurnSequence ?? 0) + 1;
+      }
+      session.codexContextTurnId = payload.turn_id;
+    }
     if (typeof payload.model === 'string') session.model = payload.model;
     if (Object.hasOwn(payload, 'sandbox_policy')) {
       session.writeAccess = writeAccessFor(payload.sandbox_policy);
@@ -496,7 +504,9 @@ export function createCodexWatcher({
         // messages must not suppress identical messages from the current tail.
         if (result.metaRecords.length > 0) session.codexMessageKeys = new Set();
         if (initial && !result.records.some((record) => record?.type === 'turn_context')) {
-          const context = await readLatestJsonlRecord(filePath, (record) => record?.type === 'turn_context');
+          const context = await readLatestJsonlRecord(filePath, (record) => record?.type === 'turn_context', {
+            endOffset: result.endOffset,
+          });
           // Only turn metadata is recovered. The skipped history must not replay
           // old tools, usage notifications, or task transitions.
           if (context) applyRecord(session, context, fileSessionId);

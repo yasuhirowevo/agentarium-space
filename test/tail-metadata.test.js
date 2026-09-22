@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { readLatestJsonlRecord } from '../src/tail.js';
+import { JsonlTail, readLatestJsonlRecord } from '../src/tail.js';
 
 async function logFile(t, content) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agentarium-metadata-'));
@@ -42,4 +42,15 @@ test('metadata recovery is safe for empty, incomplete, missing and unknown recor
     assert.equal(await readLatestJsonlRecord(file, isContext), null);
   }
   assert.equal(await readLatestJsonlRecord(path.join(os.tmpdir(), 'missing-agentarium-metadata-file'), isContext), null);
+});
+
+test('metadata recovery shares the initial tail snapshot boundary', async (t) => {
+  const original = `${context('initial')}\n`;
+  const file = await logFile(t, original);
+  const snapshot = await new JsonlTail().read(file);
+  assert.equal(snapshot.endOffset, Buffer.byteLength(original));
+  await appendFile(file, `${context('appended')}\n`);
+  const recovered = await readLatestJsonlRecord(file, isContext, { endOffset: snapshot.endOffset });
+  assert.equal(recovered.payload.model, 'initial');
+  assert.equal((await readLatestJsonlRecord(file, isContext)).payload.model, 'appended');
 });

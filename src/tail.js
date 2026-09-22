@@ -50,10 +50,14 @@ function readRange(filePath, start, end) {
 }
 
 // Recover sparse metadata without replaying skipped activity or reading an unbounded log.
-export async function readLatestJsonlRecord(filePath, predicate, { maxBytes = 8 * 1024 * 1024 } = {}) {
+export async function readLatestJsonlRecord(filePath, predicate, {
+  maxBytes = 8 * 1024 * 1024, endOffset,
+} = {}) {
   if (!Number.isFinite(maxBytes) || maxBytes <= 0) return null;
   try {
-    const { size } = await stat(filePath);
+    const info = await stat(filePath);
+    const size = endOffset === undefined ? info.size : Math.min(info.size, endOffset);
+    if (!Number.isSafeInteger(size) || size < 0) return null;
     const limit = Math.max(0, size - Math.min(Math.floor(maxBytes), 8 * 1024 * 1024));
     let cursor = size;
     let remainder = Buffer.alloc(0);
@@ -123,7 +127,7 @@ export class JsonlTail {
       try {
         const initial = await this.#readInitial(filePath, fileStat.size, state);
         this.#files.set(filePath, state);
-        return { ...initial, reset };
+        return { ...initial, reset, endOffset: fileStat.size };
       } catch (error) {
         debug(`could not read ${filePath}`, error);
         return { metaRecords: [], records: [], reset };

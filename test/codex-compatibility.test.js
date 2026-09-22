@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { appendFile, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,6 +23,7 @@ async function fixture(t) {
   const encode = (records) => records.map((entry) => JSON.stringify(entry)).join('\n') + '\n';
   await writeFile(filePath, encode([record('session_meta', { id: SESSION_ID, cwd: '/workspace/project' })]));
   return {
+    filePath,
     record,
     event: (payload) => record('event_msg', payload),
     response: (payload) => record('response_item', payload),
@@ -297,3 +299,75 @@ for (const location of ['tail', 'recovered']) {
     assert.equal((await f.scan()).status, 'waiting');
   });
 }
+
+for (const location of ['tail', 'recovered']) {
+  test(`counts usage resets when only turn context identifies the new turn (${location})`, async (t) => {
+    const f = await fixture(t);
+    await f.append([
+      f.event({ type: 'task_started', turn_id: 'old-turn' }),
+      f.record('turn_context', { turn_id: 'old-turn' }),
+      f.event(usage(100, 1_000)),
+      f.record('unknown_record', { padding: 'x'.repeat(150_000) }),
+      f.event({ type: 'task_started', turn_id: 'current-turn' }),
+      ...(location === 'tail' ? [f.record('unknown_record', { padding: 'x'.repeat(300_000) })] : []),
+      f.record('turn_context', { turn_id: 'current-turn' }),
+      ...(location === 'recovered' ? [f.record('unknown_record', { padding: 'x'.repeat(300_000) })] : []),
+      f.event(usage(20, 500)),
+    ]);
+    let session = await f.scan();
+    assert.equal(session.outputTokensTotal, 120);
+    assert.equal(session.contextUsedTokens, 500);
+    await f.append([f.event(usage(20, 500)), f.event(usage(35, 600, 15))]);
+    session = await f.scan();
+    assert.equal(session.outputTokensTotal, 135);
+    assert.equal(session.contextUsedTokens, 600);
+  });
+}
+
+test('recovering context from the same turn does not manufacture a usage reset', async (t) => {
+  const f = await fixture(t);
+  await f.append([
+    f.record('turn_context', { turn_id: 'current-turn' }),
+    f.event(usage(100, 1_000)),
+    f.record('unknown_record', { padding: 'x'.repeat(400_000) }),
+    f.event(usage(20, 500)),
+  ]);
+  const session = await f.scan();
+  assert.equal(session.outputTokensTotal, 100);
+  assert.equal(session.contextUsedTokens, 1_000);
+});
+
+test('metadata recovery does not read a new turn appended after the tail snapshot', async (t) => {
+  const f = await fixture(t);
+  await f.append([
+    f.record('unknown_record', { padding: 'x'.repeat(150_000) }),
+    f.event({ type: 'task_started', turn_id: 'first-turn' }),
+    f.record('turn_context', { turn_id: 'first-turn', model: 'first-model' }),
+    f.record('unknown_record', { padding: 'x'.repeat(300_000) }),
+    f.response({ type: 'function_call', call_id: 'first-call', name: 'exec_command' }),
+    f.event({ type: 'turn_aborted', turn_id: 'first-turn' }),
+  ]);
+  const appended = [
+    f.event({ type: 'task_started', turn_id: 'next-turn' }),
+    f.record('turn_context', { turn_id: 'next-turn', model: 'next-model' }),
+    f.event({ type: 'task_complete', turn_id: 'next-turn' }),
+  ];
+  const createReadStream = fs.createReadStream;
+  let reads = 0;
+  t.mock.method(fs, 'createReadStream', (...args) => {
+    const stream = createReadStream(...args);
+    if (args[0] === f.filePath && ++reads === 2) {
+      stream.once('end', () => fs.appendFileSync(f.filePath,
+        appended.map((entry) => JSON.stringify(entry)).join('\n') + '\n'));
+    }
+    return stream;
+  });
+  const initial = await f.scan();
+  assert.equal(initial.model, 'first-model');
+  assert.equal(initial.status, 'waiting');
+  assert.equal(initial.activity, null);
+  const updated = await f.scan();
+  assert.equal(updated.model, 'next-model');
+  assert.equal(updated.status, 'waiting');
+  assert.equal(updated.activity, null);
+});
