@@ -4,6 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import chokidar from 'chokidar';
 import { JsonlTail, readLatestJsonlRecord } from '../tail.js';
+import { applyCodexExecution } from '../codex-execution.js';
+import { applyCodexMetadata } from '../codex-metadata.js';
+import { applyCodexWorkflow } from '../codex-workflow.js';
 import {
   activeWindowMs,
   addOutputTokens,
@@ -308,7 +311,7 @@ function callDetail(argumentsValue, inputValue) {
 
 function toolEventLabel(tool, done = false) {
   const target = tool.detail ? `${tool.name}: ${tool.detail}` : tool.name;
-  return done ? `${target} done` : target;
+  return done ? `${target} returned` : target;
 }
 
 function applyTokenMetadata(session, payload) {
@@ -428,7 +431,15 @@ function applyRecord(session, record, fileSessionId) {
   if (!record || typeof record !== 'object') return;
   const payload = record.payload && typeof record.payload === 'object' ? record.payload : {};
   if (record.type === 'session_meta' && !acceptsSessionMeta(session, payload, fileSessionId)) return;
+  // Reject an older known context before updating either the legacy metadata
+  // or the execution details, so model/effort/cwd describe one accepted turn.
+  if (record.type === 'turn_context' && typeof payload.turn_id === 'string'
+    && session.codexDetails?.turn?.id !== payload.turn_id
+    && session.codexExecution?.turns.has(payload.turn_id)) return;
   applyRichFields(session, record, payload);
+  applyCodexExecution(session, record);
+  applyCodexMetadata(session, record);
+  applyCodexWorkflow(session, record);
 
   if (record.type === 'session_meta') {
     applySessionMeta(session, record, payload);

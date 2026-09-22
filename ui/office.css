@@ -662,6 +662,71 @@ button:focus-visible {
 .access-value.access-write,
 .access-write { color: var(--amber); }
 
+.codex-execution {
+  margin-bottom: 14px;
+}
+
+.observed-edits {
+  margin-top: 12px;
+}
+
+.execution-caption {
+  margin: 0 0 5px;
+  color: var(--text-muted);
+  font: 600 0.5rem/1.45 var(--utility);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.execution-value,
+.execution-list,
+.execution-note,
+.detail-list dd.execution-note {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  font: 0.6rem/1.5 var(--utility);
+}
+
+.execution-note,
+.detail-list dd.execution-note {
+  color: var(--text-muted);
+  font-size: 0.55rem;
+}
+
+.execution-list {
+  padding: 0;
+  list-style: none;
+}
+
+.execution-list > li + li {
+  margin-top: 5px;
+}
+
+#detail-edits-files {
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.command-result.is-failed,
+.allowance-window.is-stale {
+  color: var(--amber);
+}
+
+.allowance-list > li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.allowance-window {
+  margin-top: 7px;
+}
+
+.agent-assignment {
+  padding: 0 5px 6px 13px;
+  margin-top: 0;
+}
+
 .panel-section {
   margin-top: 18px;
 }

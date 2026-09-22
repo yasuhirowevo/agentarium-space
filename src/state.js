@@ -180,6 +180,48 @@ export function removeFinishedSubAgents(session, now) {
   }
 }
 
+
+function publicCodexDetails(session) {
+  if (session.source !== 'codex') return null;
+  const details = session.codexDetails ?? {};
+  return {
+    turn: details.turn ? {
+      id: details.turn.id, status: details.turn.status, startedAt: details.turn.startedAt,
+      completedAt: details.turn.completedAt, durationMs: details.turn.durationMs,
+    } : null,
+    commands: (details.commands ?? []).slice(-20).map(({
+      id, turnId, label, outcome, exitCode, durationMs, completedAt,
+    }) => ({ id, turnId, label, outcome, exitCode, durationMs, completedAt })),
+    fileChanges: (details.fileChanges ?? []).slice(0, 100).map(({ path, kind, from }) => ({
+      path, kind, ...(from ? { from } : {}),
+    })),
+    filesTruncated: details.filesTruncated === true,
+    effort: details.effort ?? null,
+    compaction: details.compaction ? {
+      observedCount: details.compaction.observedCount, lastAt: details.compaction.lastAt,
+    } : null,
+    allowances: (details.allowances ?? []).slice(-8).map(({ limitId, observedAt, windows }) => ({
+      limitId, observedAt,
+      windows: windows.map(({ name, remainingPercent, windowMinutes, resetsAt }) => ({
+        name, remainingPercent, windowMinutes, resetsAt,
+      })),
+    })),
+    plan: details.plan ? {
+      turnId: details.plan.turnId, callId: details.plan.callId, updatedAt: details.plan.updatedAt,
+      explanation: details.plan.explanation,
+      steps: details.plan.steps.slice(0, 20).map(({ step, status }) => ({ step, status })),
+    } : null,
+    delegations: (details.delegations ?? []).slice(-32).map(({
+      callId, turnId, targetId, targetPath, task, assignedAt, lastActivity, lastActivityAt,
+    }) => ({ callId, turnId, targetId, targetPath, task, assignedAt, lastActivity, lastActivityAt })),
+    agentWait: details.agentWait ? {
+      callId: details.agentWait.callId, turnId: details.agentWait.turnId,
+      startedAt: details.agentWait.startedAt, scope: details.agentWait.scope,
+      targets: details.agentWait.targets.slice(0, 32).map(({ id, path }) => ({ id, path })),
+    } : null,
+  };
+}
+
 export function toPublicSession(session, now, windowMs = activeWindowMs()) {
   removeFinishedSubAgents(session, now);
   const activity = currentActivity(session);
@@ -236,6 +278,7 @@ export function toPublicSession(session, now, windowMs = activeWindowMs()) {
       startedAt,
     })),
     recentEvents: session.recentEvents.slice(-10),
+    codexDetails: publicCodexDetails(session),
   };
 }
 
