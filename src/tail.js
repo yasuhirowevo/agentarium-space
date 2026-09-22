@@ -186,12 +186,12 @@ export class JsonlTail {
     let tail = await readRange(filePath, tailStart, size - 1);
     if (tailStart > 0) {
       const firstNewline = tail.indexOf(0x0a);
-      if (firstNewline === -1) return { metaRecords: headRecords, records: [] };
+      if (firstNewline === -1) return { metaRecords: headRecords, records: [], truncated: true };
       tail = tail.subarray(firstNewline + 1);
     }
 
     const parsedTail = parseLines(tail, true);
     state.buffer = parsedTail.remainder;
-    return { metaRecords: headRecords, records: parsedTail.records };
+    return { metaRecords: headRecords, records: parsedTail.records, truncated: true };
   }
 }

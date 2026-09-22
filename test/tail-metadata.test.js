@@ -54,3 +54,17 @@ test('metadata recovery shares the initial tail snapshot boundary', async (t) =>
   assert.equal(recovered.payload.model, 'initial');
   assert.equal((await readLatestJsonlRecord(file, isContext)).payload.model, 'appended');
 });
+
+test('initial partial reads are identified even when the head contains no complete record', async (t) => {
+  const padding = JSON.stringify({ type: 'padding', text: 'x'.repeat(400_000) });
+  for (const content of [padding, padding + '\n' + context('tail') + '\n']) {
+    const file = await logFile(t, content);
+    const reader = new JsonlTail();
+    const snapshot = await reader.read(file);
+    assert.equal(snapshot.truncated, true);
+    assert.deepEqual(snapshot.metaRecords, []);
+    assert.notEqual((await reader.read(file)).truncated, true);
+  }
+  const small = await logFile(t, context('small') + '\n');
+  assert.notEqual((await new JsonlTail().read(small)).truncated, true);
+});
