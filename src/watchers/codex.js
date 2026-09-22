@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readdir, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -137,12 +138,12 @@ function contentText(content, type) {
 }
 
 function rememberMessage(session, kind, text) {
-  // The public excerpt is 60 characters; duplicate wire formats must not move it
-  // back to an older message or refresh its display timestamp.
-  const excerpt = Array.from(text.replace(/\s+/g, ' ').trim()).slice(0, 60).join('');
-  if (!excerpt) return false;
+  // Compare the complete text so distinct messages with the same public excerpt
+  // remain eligible, without retaining full message bodies in the dedup cache.
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return false;
   session.codexMessageKeys ??= new Set();
-  const key = `${kind}:${excerpt}`;
+  const key = `${kind}:${createHash('sha256').update(normalized).digest('hex')}`;
   if (session.codexMessageKeys.has(key)) return false;
   session.codexMessageKeys.add(key);
   if (session.codexMessageKeys.size > 128) {
@@ -490,6 +491,9 @@ export function createCodexWatcher({
           sessions.set(filePath, session);
         }
         for (const record of result.metaRecords) applyMetaRecord(session, record, fileSessionId);
+        // The next task_started may be in the skipped middle. Historical head
+        // messages must not suppress identical messages from the current tail.
+        if (result.metaRecords.length > 0) session.codexMessageKeys = new Set();
         if (initial && !result.records.some((record) => record?.type === 'turn_context')) {
           const context = await readLatestJsonlRecord(filePath, (record) => record?.type === 'turn_context');
           // Only turn metadata is recovered. The skipped history must not replay

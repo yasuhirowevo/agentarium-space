@@ -132,7 +132,8 @@ UI 側（ui/office.js）:
   `event_msg.item_completed` の `UserMessage` / `AgentMessage` と
   `response_item.message` の assistant text を受理する。ユーザー由来タイトルは実ユーザーイベントから取得し、
   system / developer / analysis / ツール宛てメッセージや埋め込みコンテキストを発話として表示しない。
-  同じ発話の複数形式での記録は重複表示せず、commentary / final と最終回答保護は維持する
+  同じ発話の複数形式での記録は全文で重複判定し、同じ先頭部分を持つ別の発話を除外しない。
+  先頭領域の履歴用の重複状態を末尾の現在ターンへ持ち越さず、commentary / final と最終回答保護は維持する
 - Codex の `turn_aborted` は実行中ターンとその pending tools を終了させる。
   ターン ID がある場合は別ターンの終了通知で現在の作業を終了させない
 - Codex の初回読み取りで `turn_context` が末尾の読取範囲に存在しない場合は、

@@ -230,3 +230,42 @@ test('tail context takes precedence and old head finals do not block current com
   assert.equal(session.lastMessage, 'Current turn in progress');
   assert.equal(session.lastMessageKind, 'commentary');
 });
+
+for (const format of ['legacy', 'response', 'completed']) {
+  test(`head message dedup does not suppress current tail messages (${format})`, async (t) => {
+    const f = await fixture(t);
+    const message = (text, phase) => {
+      if (format === 'legacy') return f.event({ type: 'agent_message', message: text, phase });
+      if (format === 'completed') return f.event(completed('AgentMessage', text, phase));
+      return f.response(assistant(text, phase));
+    };
+    const currentText = 'Checking project compatibility';
+    await f.append([
+      f.event({ type: 'task_started', turn_id: 'old-turn' }),
+      message(currentText, 'commentary'),
+      message('Previous turn completed', 'final_answer'),
+      f.record('unknown_record', { padding: 'x'.repeat(150_000) }),
+      f.event({ type: 'task_started', turn_id: 'current-turn' }),
+      f.record('unknown_record', { padding: 'x'.repeat(300_000) }),
+      message(currentText, 'commentary'),
+    ]);
+    const session = await f.scan();
+    assert.equal(session.lastMessage, currentText);
+    assert.equal(session.lastMessageKind, 'commentary');
+  });
+}
+
+test('distinct messages sharing an excerpt still update the current speech', async (t) => {
+  const f = await fixture(t);
+  const prefix = 'Checking the current project and its compatibility with logs. ';
+  const records = [
+    f.event({ type: 'task_started', turn_id: 'turn-1' }),
+    f.response(assistant(prefix + 'First check.')),
+    f.response(assistant('Running the second check.')),
+  ];
+  const current = f.response(assistant(prefix + 'Last check.'));
+  await f.append([...records, current]);
+  const session = await f.scan();
+  assert.equal(session.lastMessage, 'Checking the current project and its compatibility with logs');
+  assert.equal(session.lastMessageAt, Date.parse(current.timestamp));
+});
