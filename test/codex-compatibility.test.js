@@ -234,6 +234,26 @@ test('tail context takes precedence and old head finals do not block current com
 });
 
 for (const format of ['legacy', 'response', 'completed']) {
+  test(`current tail speech uses its own timestamp when the head has identical text (${format})`, async (t) => {
+    const f = await fixture(t);
+    const message = () => {
+      if (format === 'legacy') return f.event({ type: 'agent_message', message: 'Checking inputs', phase: 'commentary' });
+      if (format === 'completed') return f.event(completed('AgentMessage', 'Checking inputs', 'commentary'));
+      return f.response(assistant('Checking inputs'));
+    };
+    await f.append([
+      f.event({ type: 'task_started', turn_id: 'old-turn' }), message(),
+      f.record('unknown_record', { padding: 'x'.repeat(150_000) }),
+      f.event({ type: 'task_started', turn_id: 'current-turn' }),
+      f.record('unknown_record', { padding: 'x'.repeat(300_000) }),
+    ]);
+    const current = message();
+    await f.append([current]);
+    const session = await f.scan();
+    assert.equal(session.lastMessage, 'Checking inputs');
+    assert.equal(session.lastMessageAt, Date.parse(current.timestamp));
+  });
+
   test(`head message dedup does not suppress current tail messages (${format})`, async (t) => {
     const f = await fixture(t);
     const message = (text, phase) => {
@@ -296,6 +316,23 @@ for (const format of ['response', 'completed']) {
 }
 
 for (const idFirst of [false, true]) {
+  test(`new turn speech updates once with ID ${idFirst ? 'first' : 'last'}`, async (t) => {
+    const f = await fixture(t);
+    const message = (id) => f.event({ type: 'item_completed', item: {
+      ...completed('AgentMessage', 'Completed', 'final_answer').item, id,
+    } });
+    for (const turn of ['turn-1', 'turn-2']) {
+      await f.append([f.event({ type: 'task_started', turn_id: turn })]);
+      const first = idFirst ? message(turn) : f.response(assistant('Completed', 'final_answer'));
+      await f.append([first]);
+      const duplicate = idFirst ? f.response(assistant('Completed', 'final_answer')) : message(turn);
+      await f.append([duplicate, message(turn)]);
+      const session = await f.scan();
+      assert.equal(session.lastMessageAt, Date.parse(first.timestamp));
+      await f.append([f.event({ type: 'task_complete', turn_id: turn })]);
+    }
+  });
+
   test(`matches ID-less and identified messages with ID ${idFirst ? 'first' : 'last'}`, async (t) => {
     const f = await fixture(t);
     const text = 'Running tests';
@@ -344,6 +381,85 @@ test('repeated starts preserve the final answer and do not reopen a completed tu
   assert.equal(session.lastMessage, 'New turn commentary');
   assert.equal(session.lastMessageKind, 'commentary');
 });
+
+test('a later message ID updates legacy same-text speech without requiring an earlier ID', async (t) => {
+  const f = await fixture(t);
+  const first = f.event({ type: 'agent_message', message: 'Completed' });
+  await f.append([
+    f.event({ type: 'task_started', turn_id: 'turn-1' }), first,
+    f.event({ type: 'task_complete', turn_id: 'turn-1' }),
+    f.event({ type: 'task_started', turn_id: 'turn-2' }),
+  ]);
+  const current = f.event({ type: 'agent_message', message: 'Completed' });
+  await f.append([current]);
+  assert.equal((await f.scan()).lastMessageAt, Date.parse(first.timestamp));
+  await f.append([f.event(completed('AgentMessage', 'Completed', 'final_answer'))]);
+  assert.equal((await f.scan()).lastMessageAt, Date.parse(current.timestamp));
+});
+
+test('a delayed alias does not replace progress shown after suppressed speech', async (t) => {
+  const f = await fixture(t);
+  await f.append([
+    f.event({ type: 'task_started', turn_id: 'turn-1' }),
+    f.response(assistant('Checking inputs')),
+    f.event({ type: 'task_complete', turn_id: 'turn-1' }),
+    f.event({ type: 'task_started', turn_id: 'turn-2' }),
+    f.response(assistant('Checking inputs')),
+  ]);
+  const progress = f.response({ type: 'reasoning', summary: [{ type: 'summary_text', text: 'Inspecting results' }] });
+  await f.append([progress, f.event(completed('AgentMessage', 'Checking inputs', 'commentary'))]);
+  const session = await f.scan();
+  assert.equal(session.lastMessage, 'Inspecting results');
+  assert.equal(session.lastMessageKind, 'progress');
+  assert.equal(session.lastMessageAt, Date.parse(progress.timestamp));
+});
+
+test('a past start and abort cannot replace the current turn or clear its tools', async (t) => {
+  const f = await fixture(t);
+  await f.append([
+    f.event({ type: 'task_started', turn_id: 'previous-turn' }),
+    f.event({ type: 'task_complete', turn_id: 'previous-turn' }),
+    f.event({ type: 'task_started', turn_id: 'current-turn' }),
+    f.response({ type: 'function_call', call_id: 'current-call', name: 'exec_command' }),
+    f.event({ type: 'task_started', turn_id: 'previous-turn' }),
+    f.event({ type: 'turn_aborted', turn_id: 'previous-turn' }),
+  ]);
+  const session = await f.scan();
+  assert.equal(session.status, 'tool');
+  assert.equal(session.activity, 'exec_command');
+  assert.equal(session.recentEvents.filter((event) => event.endsWith('Task started')).length, 2);
+});
+
+for (const termination of ['task_complete', 'turn_aborted']) {
+  for (const recoverContext of [false, true]) {
+    test(`an observed ${termination} prevents reopening when the start was skipped (context ${recoverContext})`, async (t) => {
+      const f = await fixture(t);
+      await f.append([
+        f.record('unknown_record', { padding: 'x'.repeat(150_000) }),
+        f.event({ type: 'task_started', turn_id: 'previous-turn' }),
+        ...(recoverContext ? [f.record('turn_context', { turn_id: 'previous-turn' })] : []),
+        f.record('unknown_record', { padding: 'x'.repeat(300_000) }),
+        f.response(assistant('Finished', 'final_answer')),
+        f.event({ type: termination, turn_id: 'previous-turn' }),
+      ]);
+      assert.equal((await f.scan()).status, 'waiting');
+      await f.append([
+        f.event({ type: 'task_started', turn_id: 'previous-turn' }),
+        f.response(assistant('Late commentary')),
+      ]);
+      let session = await f.scan();
+      assert.equal(session.status, 'waiting');
+      assert.equal(session.lastMessage, 'Finished');
+      await f.append([
+        f.event({ type: 'task_started', turn_id: 'current-turn' }),
+        f.response(assistant('New work')),
+      ]);
+      session = await f.scan();
+      assert.equal(session.lastMessage, 'New work');
+      assert.equal(session.lastMessageKind, 'commentary');
+    });
+  }
+}
 
 test('a new start resets message identities even when its turn context arrived first', async (t) => {
   const f = await fixture(t);

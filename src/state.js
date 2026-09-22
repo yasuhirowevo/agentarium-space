@@ -124,6 +124,7 @@ export function setLastMessage(session, value, time, kind = 'final', { deduplica
   session.lastMessage = message;
   session.lastMessageAt = time;
   session.lastMessageKind = messageKind;
+  return true;
 }
 
 export function addRecentEvent(session, timestamp, label) {
