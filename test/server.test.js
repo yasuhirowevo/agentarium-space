@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import { request } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { WebSocket } from 'ws';
 import { startServer } from '../src/server.js';
+
+const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 
 function requestStatus(url, headers = {}, rawPath) {
   return new Promise((resolve, reject) => {
@@ -147,10 +149,12 @@ test('startup token protects HTTP assets and WebSocket snapshots', async (t) => 
       origin: protectedUrl.origin,
     });
     assert.equal(browserSnapshot.type, 'snapshot');
+    assert.equal(browserSnapshot.appVersion, version);
     assert.deepEqual(browserSnapshot.sessions, []);
 
     const nativeSnapshot = await receiveSnapshot(websocketUrl);
     assert.equal(nativeSnapshot.type, 'snapshot');
+    assert.equal(nativeSnapshot.appVersion, version);
     assert.deepEqual(nativeSnapshot.sessions, []);
   });
 

@@ -145,6 +145,19 @@ button:focus-visible {
   text-transform: uppercase;
 }
 
+.header-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.app-version {
+  color: var(--text-muted);
+  font: 400 0.6rem/1 var(--utility);
+  white-space: nowrap;
+}
+
 .hud-clock {
   color: var(--cyan);
   font: 500 0.68rem/1 var(--utility);
