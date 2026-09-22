@@ -137,23 +137,40 @@ function contentText(content, type) {
     .join('\n');
 }
 
-function rememberMessage(session, kind, text) {
+function resetMessages(session) {
+  session.codexMessageKeys = new Map();
+  session.codexMessageIds = new Set();
+}
+
+function rememberMessage(session, kind, text, messageId) {
   // Compare the complete text so distinct messages with the same public excerpt
   // remain eligible, without retaining full message bodies in the dedup cache.
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (!normalized) return false;
-  session.codexMessageKeys ??= new Set();
+  if (!session.codexMessageKeys) resetMessages(session);
   const key = `${kind}:${createHash('sha256').update(normalized).digest('hex')}`;
-  if (session.codexMessageKeys.has(key)) return false;
-  session.codexMessageKeys.add(key);
-  if (session.codexMessageKeys.size > 128) {
-    session.codexMessageKeys.delete(session.codexMessageKeys.values().next().value);
+  const identity = typeof messageId === 'string' && messageId ? `${kind}:${messageId}` : null;
+  if (identity && session.codexMessageIds.has(identity)) return false;
+  const previousId = session.codexMessageKeys.get(key);
+  // An ID-less record can be the other representation of an identified message.
+  // Once that record has an ID, another ID with the same text is a new utterance.
+  const duplicate = session.codexMessageKeys.has(key) && (!identity || previousId === null);
+  if (identity) {
+    session.codexMessageIds.add(identity);
+    if (session.codexMessageIds.size > 128) {
+      session.codexMessageIds.delete(session.codexMessageIds.values().next().value);
+    }
   }
-  return true;
+  session.codexMessageKeys.delete(key);
+  session.codexMessageKeys.set(key, identity ?? previousId ?? null);
+  if (session.codexMessageKeys.size > 128) {
+    session.codexMessageKeys.delete(session.codexMessageKeys.keys().next().value);
+  }
+  return duplicate ? false : key;
 }
 
-function applyUserMessage(session, text, timestamp, includeEvent) {
-  if (!rememberMessage(session, 'user', text)) return;
+function applyUserMessage(session, text, timestamp, includeEvent, messageId) {
+  if (!rememberMessage(session, 'user', text, messageId)) return;
   setFirstUserPrompt(session, text);
   if (includeEvent) addRecentEvent(session, timestamp, 'User message');
 }
@@ -162,7 +179,14 @@ function applyAgentMessage(session, payload, text, time) {
   const kind = agentMessageKind(payload);
   if (!kind || (kind !== 'final' && session.finalMessageSeen)) return;
   if (kind === 'final' && text.trim()) session.finalMessageSeen = true;
-  if (rememberMessage(session, kind, text)) setLastMessage(session, text, time, kind);
+  const messageKey = rememberMessage(session, kind, text, payload.id);
+  if (messageKey) {
+    // Preserve the legacy no-ID behavior across turns, while updating different
+    // full messages and explicitly identified utterances with the same excerpt.
+    const deduplicate = !payload.id && messageKey === session.codexLastAgentMessageKey;
+    setLastMessage(session, text, time, kind, { deduplicate });
+    session.codexLastAgentMessageKey = messageKey;
+  }
 }
 
 function applyMessageRecord(session, record, payload, time, includeEvent = true) {
@@ -173,7 +197,7 @@ function applyMessageRecord(session, record, payload, time, includeEvent = true)
   } else if (record.type === 'event_msg' && payload.type === 'item_completed') {
     const item = payload.item;
     if (item?.type === 'UserMessage') {
-      applyUserMessage(session, contentText(item.content, 'text'), record.timestamp, includeEvent);
+      applyUserMessage(session, contentText(item.content, 'text'), record.timestamp, includeEvent, item.id);
     } else if (item?.type === 'AgentMessage') {
       applyAgentMessage(session, item, contentText(item.content, 'Text'), time);
     }
@@ -387,11 +411,14 @@ function applyRecord(session, record, fileSessionId) {
   if (record.type === 'event_msg') {
     const time = touchSession(session, record.timestamp);
     if (payload.type === 'task_started') {
+      const turnId = typeof payload.turn_id === 'string' ? payload.turn_id : null;
+      if (turnId && turnId === session.codexStartedTurnId) return;
       if (!session.taskActive || !payload.turn_id || payload.turn_id !== session.codexTurnId) {
         session.codexTurnSequence = (session.codexTurnSequence ?? 0) + 1;
-        session.codexMessageKeys = new Set();
       }
-      session.codexTurnId = typeof payload.turn_id === 'string' ? payload.turn_id : null;
+      resetMessages(session);
+      session.codexStartedTurnId = turnId;
+      session.codexTurnId = turnId;
       session.taskActive = true;
       session.finalMessageSeen = false;
       addRecentEvent(session, record.timestamp, 'Task started');
@@ -502,7 +529,7 @@ export function createCodexWatcher({
         for (const record of result.metaRecords) applyMetaRecord(session, record, fileSessionId);
         // The next task_started may be in the skipped middle. Historical head
         // messages must not suppress identical messages from the current tail.
-        if (result.metaRecords.length > 0) session.codexMessageKeys = new Set();
+        if (result.metaRecords.length > 0) resetMessages(session);
         if (initial && !result.records.some((record) => record?.type === 'turn_context')) {
           const context = await readLatestJsonlRecord(filePath, (record) => record?.type === 'turn_context', {
             endOffset: result.endOffset,

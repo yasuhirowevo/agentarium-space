@@ -263,13 +263,99 @@ test('distinct messages sharing an excerpt still update the current speech', asy
   const records = [
     f.event({ type: 'task_started', turn_id: 'turn-1' }),
     f.response(assistant(prefix + 'First check.')),
-    f.response(assistant('Running the second check.')),
   ];
   const current = f.response(assistant(prefix + 'Last check.'));
   await f.append([...records, current]);
   const session = await f.scan();
   assert.equal(session.lastMessage, 'Checking the current project and its compatibility with logs');
   assert.equal(session.lastMessageAt, Date.parse(current.timestamp));
+});
+
+for (const format of ['response', 'completed']) {
+  test(`distinct ${format} message IDs can repeat text without replaying older IDs`, async (t) => {
+    const f = await fixture(t);
+    const message = (id, text) => format === 'response'
+      ? f.response(assistant(text, 'commentary', { id }))
+      : f.event({ type: 'item_completed', item: { ...completed('AgentMessage', text, 'commentary').item, id } });
+    await f.append([
+      f.event({ type: 'task_started', turn_id: 'turn-1' }),
+      message('message-1', 'Running tests'),
+      message('message-2', 'Fixing test failures'),
+    ]);
+    const repeated = message('message-3', 'Running tests');
+    await f.append([repeated]);
+    let session = await f.scan();
+    assert.equal(session.lastMessage, 'Running tests');
+    assert.equal(session.lastMessageAt, Date.parse(repeated.timestamp));
+    const latest = message('message-4', 'Checking results');
+    await f.append([latest, message('message-1', 'Running tests'), message('message-3', 'Running tests')]);
+    session = await f.scan();
+    assert.equal(session.lastMessage, 'Checking results');
+    assert.equal(session.lastMessageAt, Date.parse(latest.timestamp));
+  });
+}
+
+for (const idFirst of [false, true]) {
+  test(`matches ID-less and identified messages with ID ${idFirst ? 'first' : 'last'}`, async (t) => {
+    const f = await fixture(t);
+    const text = 'Running tests';
+    const first = idFirst
+      ? f.event(completed('AgentMessage', text, 'commentary'))
+      : f.response(assistant(text));
+    const duplicate = idFirst
+      ? f.response(assistant(text))
+      : f.event(completed('AgentMessage', text, 'commentary'));
+    await f.append([f.event({ type: 'task_started', turn_id: 'turn-1' }), first, duplicate]);
+    assert.equal((await f.scan()).lastMessageAt, Date.parse(first.timestamp));
+    const repeated = f.event({ type: 'item_completed', item: {
+      ...completed('AgentMessage', text, 'commentary').item, id: 'another-message',
+    } });
+    await f.append([repeated]);
+    assert.equal((await f.scan()).lastMessageAt, Date.parse(repeated.timestamp));
+  });
+}
+
+test('repeated starts preserve the final answer and do not reopen a completed turn', async (t) => {
+  const f = await fixture(t);
+  const final = f.response(assistant('Checks completed', 'final_answer'));
+  await f.append([
+    f.event({ type: 'task_started', turn_id: 'turn-1' }), final,
+    f.event({ type: 'task_started', turn_id: 'turn-1' }),
+    f.response(assistant('Late commentary')),
+  ]);
+  let session = await f.scan();
+  assert.equal(session.lastMessage, 'Checks completed');
+  assert.equal(session.lastMessageAt, Date.parse(final.timestamp));
+  assert.equal(session.recentEvents.filter((event) => event.endsWith('Task started')).length, 1);
+  await f.append([
+    f.event({ type: 'task_complete', turn_id: 'turn-1' }),
+    f.event({ type: 'task_started', turn_id: 'turn-1' }),
+    f.response(assistant('More late commentary')),
+  ]);
+  session = await f.scan();
+  assert.equal(session.status, 'waiting');
+  assert.equal(session.lastMessage, 'Checks completed');
+  await f.append([
+    f.record('turn_context', { turn_id: 'turn-2' }),
+    f.event({ type: 'task_started', turn_id: 'turn-2' }),
+    f.response(assistant('New turn commentary')),
+  ]);
+  session = await f.scan();
+  assert.equal(session.lastMessage, 'New turn commentary');
+  assert.equal(session.lastMessageKind, 'commentary');
+});
+
+test('a new start resets message identities even when its turn context arrived first', async (t) => {
+  const f = await fixture(t);
+  await f.append([
+    f.event({ type: 'task_started', turn_id: 'turn-1' }),
+    f.event(completed('AgentMessage', 'Checking inputs', 'commentary')),
+    f.record('turn_context', { turn_id: 'turn-2' }),
+    f.event({ type: 'task_started', turn_id: 'turn-2' }),
+  ]);
+  const current = f.event(completed('AgentMessage', 'Checking inputs', 'commentary'));
+  await f.append([current]);
+  assert.equal((await f.scan()).lastMessageAt, Date.parse(current.timestamp));
 });
 
 for (const location of ['tail', 'recovered']) {
