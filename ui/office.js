@@ -1,5 +1,6 @@
 import { contextLabel, contextUsage } from './context-metrics.js';
 import { activityMotionFor } from './activity-motion.js';
+import { assignmentLabel, codexDetailReadout } from './codex-details.js';
 import {
   normalizeMessageKind,
   shouldBootstrapSpotlight,
@@ -122,6 +123,22 @@ const detailTopTools = document.querySelector('#detail-top-tools');
 const detailTimeline = document.querySelector('#detail-timeline');
 const detailAgents = document.querySelector('#detail-agents');
 const detailEvents = document.querySelector('#detail-events');
+const codexExecution = document.querySelector('#codex-execution');
+const codexObservations = document.querySelector('#codex-observations');
+const detailTurnLabel = document.querySelector('#detail-turn-label');
+const detailTurnDuration = document.querySelector('#detail-turn-duration');
+const detailCommandResult = document.querySelector('#detail-command-result');
+const detailCommandLabel = document.querySelector('#detail-command-label');
+const detailEditsLabel = document.querySelector('#detail-edits-label');
+const detailEditsCount = document.querySelector('#detail-edits-count');
+const detailEditsFiles = document.querySelector('#detail-edits-files');
+const detailEffort = document.querySelector('#detail-effort');
+const detailCompactions = document.querySelector('#detail-compactions');
+const detailAllowances = document.querySelector('#detail-allowances');
+const detailPlan = document.querySelector('#detail-plan');
+const detailPlanExplanation = document.querySelector('#detail-plan-explanation');
+const detailDelegations = document.querySelector('#detail-delegations');
+const detailAgentWait = document.querySelector('#detail-agent-wait');
 
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -2666,6 +2683,7 @@ class DetailPanel {
       () => this.open(session.key),
       session,
     ));
+    this.appendAssignmentLabel(item, session);
 
     const children = document.createElement('ul');
     const codexChildren = projectSessions
@@ -2840,6 +2858,95 @@ class DetailPanel {
     detailLongRun.hidden = !longRun;
     detailLastSignal.textContent = formatRelativeTime(session.lastActivity, now);
     detailUptime.textContent = formatUptime(session.startedAt, now);
+    this.renderCodexDetails(session, now);
+  }
+
+  renderCodexDetails(session, now) {
+    const visible = session.source === 'codex';
+    codexExecution.hidden = !visible;
+    codexObservations.hidden = !visible;
+    detailEffort.hidden = !visible;
+    if (!visible) return;
+    const readout = codexDetailReadout(session.codexDetails, now, [...this.store.sessionsByKey.values()]);
+    detailTurnLabel.textContent = readout.turn.label;
+    detailTurnDuration.textContent = readout.turn.duration;
+    detailCommandResult.textContent = readout.command?.result || 'Unknown — no command result observed';
+    detailCommandResult.classList.toggle('is-failed', readout.command?.failed === true);
+    detailCommandLabel.textContent = readout.command?.label || '';
+    detailEditsLabel.textContent = readout.edits.label;
+    detailEditsCount.textContent = readout.edits.count;
+    detailEffort.textContent = `Effort · ${readout.effort}`;
+    detailCompactions.textContent = readout.compaction;
+    detailAgentWait.hidden = !readout.wait;
+    detailAgentWait.textContent = readout.wait || '';
+    detailPlanExplanation.hidden = !readout.plan?.explanation;
+    detailPlanExplanation.textContent = readout.plan?.explanation || '';
+
+    // The existing one-second tick updates duration and staleness. Keep stable
+    // lists mounted so scrolling and text selection survive those updates.
+    const filesSignature = JSON.stringify(readout.edits.files);
+    if (this.filesSignature !== filesSignature) {
+      this.filesSignature = filesSignature;
+      detailEditsFiles.replaceChildren();
+      for (const file of readout.edits.files) this.appendItem(detailEditsFiles, file);
+    }
+    const planSignature = JSON.stringify(readout.plan?.steps || null);
+    if (this.planSignature !== planSignature) {
+      this.planSignature = planSignature;
+      detailPlan.replaceChildren();
+      for (const step of readout.plan?.steps || []) this.appendItem(detailPlan, step);
+      if (!detailPlan.children.length) this.appendItem(detailPlan, 'Unknown — no explicit steps observed');
+    }
+    const delegationsSignature = JSON.stringify(readout.delegations);
+    if (this.delegationsSignature !== delegationsSignature) {
+      this.delegationsSignature = delegationsSignature;
+      detailDelegations.replaceChildren();
+      for (const delegation of readout.delegations) {
+        const item = document.createElement('li');
+        const label = document.createElement('div');
+        label.textContent = `${delegation.target} · ${delegation.task}`;
+        const activity = document.createElement('div');
+        activity.className = 'execution-note';
+        activity.textContent = delegation.activity;
+        item.append(label, activity);
+        detailDelegations.append(item);
+      }
+      if (!detailDelegations.children.length) this.appendItem(detailDelegations, 'No assignments observed');
+    }
+    const allowancesSignature = JSON.stringify(readout.allowances);
+    if (this.allowancesSignature === allowancesSignature) return;
+    this.allowancesSignature = allowancesSignature;
+    detailAllowances.replaceChildren();
+    for (const allowance of readout.allowances) {
+      const item = document.createElement('li');
+      const limit = document.createElement('div');
+      limit.textContent = allowance.limit;
+      const observed = document.createElement('div');
+      observed.className = 'execution-note';
+      observed.textContent = allowance.observed;
+      item.append(limit, observed);
+      for (const window of allowance.windows) {
+        const row = document.createElement('div');
+        row.className = `allowance-window${window.stale ? ' is-stale' : ''}`;
+        const label = document.createElement('div');
+        label.textContent = window.label;
+        const value = document.createElement('div');
+        value.textContent = window.value;
+        const reset = document.createElement('div');
+        reset.className = 'execution-note';
+        reset.textContent = window.reset;
+        row.append(label, value, reset);
+        item.append(row);
+      }
+      if (!allowance.windows.length) {
+        const unknown = document.createElement('div');
+        unknown.className = 'execution-note';
+        unknown.textContent = 'Window / remaining / reset unknown';
+        item.append(unknown);
+      }
+      detailAllowances.append(item);
+    }
+    if (!readout.allowances.length) this.appendItem(detailAllowances, 'Unknown — no allowance snapshot observed');
   }
 
   tick(now = Date.now()) {
@@ -2939,6 +3046,7 @@ class DetailPanel {
       root,
       session,
     );
+    this.appendAssignmentLabel(item, session);
     list.append(item);
     const childList = document.createElement('ul');
     const codexChildren = [...this.store.sessionsByKey.values()]
@@ -2954,6 +3062,15 @@ class DetailPanel {
       ));
     }
     if (childList.children.length) item.append(childList);
+  }
+
+  appendAssignmentLabel(item, session) {
+    const assignment = assignmentLabel(session, [...this.store.sessionsByKey.values()]);
+    if (!assignment) return;
+    const label = document.createElement('p');
+    label.className = 'execution-note agent-assignment';
+    label.textContent = assignment;
+    item.append(label);
   }
 
   createAgentNode(title, state, status, root = false, session = null) {

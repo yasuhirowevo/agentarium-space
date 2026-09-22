@@ -4,6 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import chokidar from 'chokidar';
 import { JsonlTail, readLatestJsonlRecord } from '../tail.js';
+import { applyCodexExecution } from '../codex-execution.js';
+import { applyCodexMetadata } from '../codex-metadata.js';
+import { applyCodexWorkflow } from '../codex-workflow.js';
 import {
   activeWindowMs,
   addOutputTokens,
@@ -311,7 +314,7 @@ function callDetail(argumentsValue, inputValue) {
 
 function toolEventLabel(tool, done = false) {
   const target = tool.detail ? `${tool.name}: ${tool.detail}` : tool.name;
-  return done ? `${target} done` : target;
+  return done ? `${target} returned` : target;
 }
 
 function applyTokenMetadata(session, payload) {
@@ -373,7 +376,6 @@ function observeUsageTurn(session, turnId) {
     if (session.codexUsageTurnIds.size > 128) {
       session.codexUsageTurnIds.delete(session.codexUsageTurnIds.values().next().value);
     }
-    if (session.codexKnownTurnIds?.has(turnId)) return;
   }
   session.codexTurnSequence = (session.codexTurnSequence ?? 0) + 1;
 }
@@ -432,6 +434,10 @@ function applyRecord(session, record, fileSessionId) {
   if (!record || typeof record !== 'object') return;
   const payload = record.payload && typeof record.payload === 'object' ? record.payload : {};
   if (record.type === 'session_meta' && !acceptsSessionMeta(session, payload, fileSessionId)) return;
+  // Reject stale contexts before either metadata or completion is changed.
+  if (record.type === 'turn_context' && typeof payload.turn_id === 'string'
+    && session.codexDetails?.turn?.id !== payload.turn_id
+    && session.codexExecution?.turns.has(payload.turn_id)) return;
   if (record.type === 'turn_context' && typeof payload.turn_id === 'string' && payload.turn_id
     && payload.turn_id !== (session.codexTurnId ?? session.completedTurnId)) {
     if (session.codexKnownTurnIds?.has(payload.turn_id)) return;
@@ -439,7 +445,23 @@ function applyRecord(session, record, fileSessionId) {
     session.completedAt = null;
     session.completedTurnId = null;
   }
+  const eventTime = record.type === 'event_msg' ? touchSession(session, record.timestamp) : null;
+  if (record.type === 'event_msg') {
+    // Retirement recovery can know boundaries outside the observed details tail.
+    // Apply its acceptance rules before any detail reducer sees a replay.
+    if (payload.type === 'task_started') {
+      const turnId = typeof payload.turn_id === 'string' ? payload.turn_id : null;
+      if (turnId && (session.codexKnownTurnIds?.has(turnId) || turnId === session.completedTurnId)) return;
+      if (!turnId && Number.isFinite(session.completedAt) && eventTime <= session.completedAt) return;
+    } else if (payload.type === 'task_complete' || payload.type === 'turn_aborted') {
+      if (typeof payload.turn_id === 'string' && typeof session.codexTurnId === 'string'
+        && payload.turn_id !== session.codexTurnId) return;
+    }
+  }
   applyRichFields(session, record, payload);
+  applyCodexExecution(session, record);
+  applyCodexMetadata(session, record);
+  applyCodexWorkflow(session, record);
 
   if (record.type === 'session_meta') {
     applySessionMeta(session, record, payload);
@@ -450,15 +472,13 @@ function applyRecord(session, record, fileSessionId) {
     touchSession(session, record.timestamp);
     if (typeof payload.cwd === 'string') session.cwd = normalizeCwd(payload.cwd);
     if (typeof payload.turn_id === 'string') session.codexTurnId = payload.turn_id;
-    return;
+    return true;
   }
 
   if (record.type === 'event_msg') {
-    const time = touchSession(session, record.timestamp);
+    const time = eventTime;
     if (payload.type === 'task_started') {
       const turnId = typeof payload.turn_id === 'string' ? payload.turn_id : null;
-      if (turnId && (session.codexKnownTurnIds?.has(turnId) || turnId === session.completedTurnId)) return;
-      if (!turnId && Number.isFinite(session.completedAt) && time <= session.completedAt) return;
       session.completedAt = null;
       session.completedTurnId = null;
       session.retirementTaskActive = true;
@@ -469,8 +489,6 @@ function applyRecord(session, record, fileSessionId) {
       session.finalMessageSeen = false;
       addRecentEvent(session, record.timestamp, 'Task started');
     } else if (payload.type === 'task_complete' || payload.type === 'turn_aborted') {
-      if (typeof payload.turn_id === 'string' && typeof session.codexTurnId === 'string'
-        && payload.turn_id !== session.codexTurnId) return;
       rememberTurn(session, typeof payload.turn_id === 'string' ? payload.turn_id : session.codexTurnId);
       session.taskActive = false;
       session.retirementTaskActive = false;
@@ -543,18 +561,21 @@ function isTaskBoundary(record) {
     && ['task_started', 'task_complete', 'turn_aborted'].includes(record.payload?.type);
 }
 
-async function recoverRetirementState(filePath, endOffset) {
+async function recoverRetirementState(filePath, endOffset, maxBytes) {
   const boundaries = [];
   // The reader walks backward under its existing 8 MiB limit. Collect only
   // lifecycle evidence, then apply the normal acceptance rules in file order.
   await readLatestJsonlRecord(filePath, (record) => {
     if (isTaskBoundary(record) || record?.type === 'turn_context') boundaries.push(record);
     return false;
-  }, { endOffset });
+  }, { endOffset, maxBytes });
   if (boundaries.length === 0) return null;
   const recovered = createSession('', 'codex', '');
-  for (const boundary of boundaries.reverse()) applyRecord(recovered, boundary, null);
-  return recovered;
+  let context = null;
+  for (const boundary of boundaries.reverse()) {
+    if (applyRecord(recovered, boundary, null) === true) context = boundary;
+  }
+  return { state: recovered, context };
 }
 
 export function createCodexWatcher({
@@ -608,26 +629,33 @@ export function createCodexWatcher({
           resetMessages(session);
           session.codexLastAgentMessageKey = null;
         }
+        const retirement = initial && result.truncated
+          ? await recoverRetirementState(filePath, result.startOffset,
+            8 * 1024 * 1024 - (result.endOffset - result.startOffset))
+          : null;
+        if (retirement) {
+          // Seed only acceptance/retirement metadata before the observed tail.
+          const recovered = retirement.state;
+          session.retirementTaskActive = recovered.retirementTaskActive;
+          session.completedAt = recovered.completedAt;
+          session.completedTurnId = recovered.completedTurnId;
+          session.codexTurnId = recovered.codexTurnId;
+          for (const turnId of recovered.codexKnownTurnIds ?? []) rememberTurn(session, turnId);
+          // Replaced context-only identities are stale too. The current context
+          // may still receive its first observed start, so do not mark it started.
+          for (const turnId of recovered.codexExecution?.turns ?? []) {
+            if (turnId !== recovered.codexTurnId) rememberTurn(session, turnId);
+          }
+        }
         if (initial && !result.records.some((record) => record?.type === 'turn_context')) {
-          const context = await readLatestJsonlRecord(filePath, (record) => record?.type === 'turn_context', {
+          const context = retirement?.context ?? await readLatestJsonlRecord(filePath, (record) => record?.type === 'turn_context', {
             endOffset: result.endOffset,
           });
           // Only turn metadata is recovered. The skipped history must not replay
           // old tools, usage notifications, or task transitions.
           if (context) applyRecord(session, context, fileSessionId);
         }
-        const retirement = initial && (result.truncated || !result.records.some(isTaskBoundary))
-          ? await recoverRetirementState(filePath, result.endOffset)
-          : null;
         for (const record of result.records) applyRecord(session, record, fileSessionId);
-        if (retirement) {
-          // Keep public status, tools, messages and usage from normal tail replay.
-          session.retirementTaskActive = retirement.retirementTaskActive;
-          session.completedAt = retirement.completedAt;
-          session.completedTurnId = retirement.completedTurnId;
-          session.codexTurnId = retirement.codexTurnId;
-          for (const turnId of retirement.codexKnownTurnIds ?? []) rememberTurn(session, turnId);
-        }
         if (result.metaRecords.length > 0 || result.records.length > 0 || result.reset) onUpdate();
       } catch (error) {
         debug(`could not process ${filePath}`, error);

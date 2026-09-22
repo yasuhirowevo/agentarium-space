@@ -111,6 +111,25 @@
                     <span class="long-run-alert" id="detail-long-run">Long run</span>
                   </div>
 
+                  <section class="codex-execution" id="codex-execution" aria-label="Codex execution details" hidden>
+                    <dl class="detail-list instrument-grid">
+                      <div class="instrument-wide">
+                        <dt id="detail-turn-label">Turn unknown</dt>
+                        <dd id="detail-turn-duration">Unknown</dd>
+                      </div>
+                      <div class="instrument-wide">
+                        <dt>Latest command result</dt>
+                        <dd class="command-result" id="detail-command-result">Unknown</dd>
+                        <dd class="execution-note" id="detail-command-label"></dd>
+                      </div>
+                    </dl>
+                    <div class="observed-edits">
+                      <p class="execution-caption" id="detail-edits-label">Observed edits</p>
+                      <p class="execution-value" id="detail-edits-count">Unknown</p>
+                      <ul class="execution-list" id="detail-edits-files"></ul>
+                    </div>
+                  </section>
+
                   <dl class="detail-list instrument-grid">
                     <div>
                       <dt>Source</dt>
@@ -131,6 +150,7 @@
                     <div>
                       <dt>Model</dt>
                       <dd id="detail-model">—</dd>
+                      <dd class="execution-note" id="detail-effort" hidden>Effort unknown</dd>
                     </div>
                     <div>
                       <dt>Access</dt>
@@ -157,6 +177,28 @@
                       <dd id="detail-top-tools">—</dd>
                     </div>
                   </dl>
+
+                  <div id="codex-observations" hidden>
+                    <section class="panel-section">
+                      <h3>Explicit plan</h3>
+                      <p class="execution-note" id="detail-plan-explanation" hidden></p>
+                      <ol class="execution-list" id="detail-plan"></ol>
+                    </section>
+                    <section class="panel-section">
+                      <h3>Observed assignments</h3>
+                      <p class="execution-value" id="detail-agent-wait" hidden></p>
+                      <ul class="execution-list" id="detail-delegations"></ul>
+                    </section>
+                    <section class="panel-section">
+                      <h3>Observed compactions</h3>
+                      <p class="execution-value" id="detail-compactions">Unknown</p>
+                    </section>
+                    <section class="panel-section">
+                      <h3>Account / limit allowance</h3>
+                      <p class="execution-note">Local snapshot · shared account allowance</p>
+                      <ul class="execution-list allowance-list" id="detail-allowances"></ul>
+                    </section>
+                  </div>
 
                   <section class="panel-section timeline-section">
                     <h3>Status timeline</h3>

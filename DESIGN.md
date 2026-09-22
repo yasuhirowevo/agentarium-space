@@ -179,6 +179,124 @@ UI 側（ui/office.js）:
   ソース側アプリのウィンドウ表示状態による例外は設けない。
 - 境界時刻・完了後のメタ更新・再開・稼働中の子を合成データで検証する。
 
+## Codex execution details（v2.22 — 観測した作業結果）
+
+Issue #16 の情報は FOCUS / LIVE STREAM / AGENT TREE に置き、Canvas・既存の発話・
+状態判定・親子配置・CTX/OUT と tool call の集計は維持する。追加公開フィールドは
+Codex の `codexDetails`（Claude は null）。パッチ、完全なコマンド出力、委任全文、
+raw event は公開せず、以下の有界な要約だけを使う。
+
+### 実行結果・編集・ターン（優先実装 1–3）
+
+- `turn: {id, status, startedAt, completedAt, durationMs} | null` はリクエスト単位。
+  status は active / completed / interrupted / unknown。公開時刻・時間はすべて ms。
+  `task_started.started_at` と `task_complete/turn_aborted.started_at/completed_at` は
+  実機で epoch 秒を確認したため 1000 倍する。明示時刻がなければ対応するレコードの
+  ISO timestamp を使う。終了側の `duration_ms` は有効な明示時間として使用できる。
+  開始未観測なら session UPTIME や接続時刻で補わず、終了時間も不明なら unavailable。
+  active のみ毎秒進め、終了・中断で固定する。別ターンの終了・既知 ID の開始再通知は無視する。
+  新しい turn_context しか見えない場合は unknown のターンへ切り替え、古い時間や編集を継承しない。
+- `commands` は直近20件の
+  `{id, turnId, label, outcome, exitCode, durationMs, completedAt}`。
+  `event_msg.item_completed` の `CommandExecution` を使う。command は文字列配列または
+  文字列から最大120文字。exit_code が整数かつ status が completed / failed のとき、
+  0 は success、非0は failed（failed status は常に failed）。未知 status は unknown。
+  duration の `{secs,nanos}` は `secs*1000+nanos/1e6`、それがなければ同じ item の
+  `started_at_ms/completed_at_ms` の差。単位不明の duration 数値は推定しない。
+  終了 item だけを結果として扱い、process/session handle や途中の output は成功にしない。
+  item ID と turn ID で重複を除き、同文の並列コマンドは別々に残す。ID のない結果は
+  確定した別操作として数えない。外側の call ID と item ID の一致を仮定しない。
+- orchestration の内側でも上記の完了 item は表示するが、外側の wrapper を成功結果に
+  追加せず toolCallsTotal も加算しない。旧形式・未対応の tool output は neutral な
+  returned として既存イベントに残す。exit 0 は当該コマンドの成功だけを示す。
+- `fileChanges: [{path,kind,from?}]` は同じターンの成功した FileChange（status completed）
+  の changes path map から得る。add / update / delete、および update の move_path を
+  move として区別する。パッチ本文は保持しない。workspace 内は相対 path、表示は最大240文字。
+  full normalized path で重複を除き最大100件、超過は filesTruncated で「以上」と明示する。
+  失敗・拒否・提案段階は含めず、削除も観測済み変更に含める。完了後は次ターンまで保持し、
+  「Current turn / Completed turn / Interrupted turn の observed edits」と表示する。
+  Git diff の完全性は主張せず、Git polling は追加しない。
+
+### 設定・履歴・利用枠（次に実装 4–6）
+
+- `effort: string | null` は同じ turn_context の effort を最大32文字で保持する。
+  新ターン、model の変更、effort のない新しい context では未確認の旧値を引き継がない。
+  MODEL の近くに設定値として表示し、推論本文は追加公開しない。
+- `compaction: {observedCount,lastAt} | null` は top-level compacted と
+  item_completed / ContextCompaction による観測履歴。同じ ID は重複除外。
+  ID のない top-level と item の対になる記録は同ターン・同じ完了時刻のとき一件とする。
+  それ以外の ID なし記録は個別観測であり、生涯の正確な回数とは呼ばない。
+  token 減少は根拠にしない。最新時刻は epoch ms、LIVE STREAM は History compacted、
+  FOCUS は observed compactions と最新時刻を示す。
+- `allowances: [{limitId,observedAt,windows:[{name,remainingPercent,windowMinutes,resetsAt}]}]`
+  は token_count.rate_limits のローカル snapshot。limit_id ごと最大8件、各 primary /
+  secondary は存在するものだけを保持する。used_percent が finite なら
+  clamp(100-used_percent,0,100)、無効値は null。window_minutes は正の分数、
+  resets_at は確認済みの epoch 秒から ms に変換。観測時刻はレコード timestamp。
+  同じ limit の新しい snapshot で置換し、古いものでは巻き戻さない。
+  FOCUS の Account / limit allowance snapshot に window、reset、observed を併記する。
+  reset が過去、または観測から15分以上なら stale と表示する。reset 到達で値を再充填せず、
+  欠損は unknown。セッション予算・料金とは呼ばず、フリート合算はしない。
+
+
+### Explicit plans, delegation and user-action feasibility (7–9)
+
+7. CLI rollout response_item function_call `update_plan` persists
+   `{plan:[{step,status}],explanation?}`; the matching call_id output `Plan updated`
+   confirms success. Status values are pending / in_progress / completed.
+   Public `plan: {turnId,callId,updatedAt,explanation,steps}` contains at most 20 steps,
+   each limited to 120 characters, and an optional 160-character explanation.
+   Successful replacement/reordering is accepted; a new turn clears the plan.
+   Commentary and orchestration JavaScript are not plan sources. Step counts are not
+   estimates of overall task completion. App-server plan notifications alone do not
+   establish passive log availability.
+8. Direct spawn_agent / followup_task calls and successful call_id-matched outputs
+   provide observed assignments. Spawn outputs supply task_name or agent_id;
+   durable item_completed / SubAgentActivity supplies agent_path / agent_thread_id.
+   Public `delegations: [{callId,turnId,targetId,targetPath,task,assignedAt,lastActivity,lastActivityAt}]`
+   retains at most 32 assignments, with task_name preferred and text limited to 120 characters.
+   Activity started / interacted / completed / interrupted means the last observed child
+   activity, not proof that a queued follow-up assignment has finished. send_message
+   does not create an assignment. A pending direct wait_agent / wait call publishes
+   `agentWait: {callId,turnId,startedAt,targets:[{id,path}],scope:'targets'|'mailbox'}`.
+   Only explicit targets / ids identify a wait target. A targetless wait is a mailbox wait.
+   Its matching output or turn termination clears it; unrelated outputs do not.
+   Assignments remain readable in FOCUS when child logs are absent. Native hierarchy
+   and satellites remain unchanged; assignment labels are added to matching tree nodes.
+9. Approval and user-question transport events are transient in the rollout persistence
+   policy. Observed request_user_input_async responses acknowledge posting, not resolution;
+   there is no durable request/answer identity pair. Do not infer pending action from
+   approval policy, generic waiting status, or arbitrary user messages.
+   Follow-up acquisition work must verify passive request/answer/cancellation records
+   with request and turn identity, reconnect recovery, and app-server connection ownership
+   compatible with the read-only contract. Row 9 is excluded from this implementation
+   with user agreement; Issue #16 records the evidence and retains the acquisition gap.
+   A synchronous CLI request_user_input can have paired call/output records, but that
+   narrower source does not establish approval or current async-question resolution.
+
+Sources: [App Server](https://learn.chatgpt.com/docs/app-server),
+[rollout persistence](https://github.com/openai/codex/blob/main/codex-rs/rollout/src/policy.rs),
+[plan handler](https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/plan.rs),
+[async user input](https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/request_user_input_async.rs).
+
+### 読み取り境界と表示契約
+
+初回の先頭128KiBは従来のメタ情報専用とし、上記の作業・履歴を再生しない。末尾256KiBと
+以後の追記が観測対象で、追加の全ログ走査は行わない。既存の最大8MiBの turn_context 回収は
+effort と turn ID の補助に使えるが active な開始イベントとしては扱わない。
+退場判定で回収したターン境界は、古い開始・終了の再通知を詳細へ適用する前の判定にも使う。
+回収した境界から読取範囲外の実行詳細を公開せず、却下した context で完了時刻を解除しない。
+初回は末尾の最初の完全行より前の境界を先に受理判定へ反映し、その後に末尾を適用する。
+境界回収は初回 snapshot の末尾から最大8MiBの範囲内に保つ。
+truncate では観測状態をリセットし、重複判定の item ID は直近256件、turn ID は128件まで。
+公開 snapshot の再接続はサーバーの状態を引き継ぐが、サーバー再起動や読取範囲外の履歴は unavailable。
+
+FOCUS は既存のスクロール領域に詳細を追加する。結果の語・exit code・観測済み編集は
+hover や色だけに依存しない。長い値は折り返し、ファイル一覧の高さは制限してスクロールする。
+追加アニメーションや overlay は作らず、30fps / hidden 停止 / reduced-motion /
+textContent と fillText による描画を維持する。v1 の「履歴・トークン集計を実装しない」は、
+本節の観測した compaction と account allowance の限定表示について置き換える。
+
 ## 作業別モーション（v2.23 — ツールの種類を光で表す）
 
 既存の `thinking` / `tool` / `waiting` / `idle` と公開 snapshot は維持し、

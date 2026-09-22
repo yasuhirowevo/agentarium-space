@@ -215,6 +215,8 @@ for (const repeated of ['task_complete', 'task_started']) {
       const internal = f.watcher.sessions.get(f.paths.get(CHILD));
       assert.equal(internal.completedAt, doneAt);
       assert.equal(internal.retirementTaskActive, false);
+      assert.equal(internal.taskActive, false);
+      if (repeated === 'task_started') assert.equal(internal.codexDetails.turn, null);
       await f.append(CHILD, [start(BASE + 63_000, 'turn-two')]);
       assert.equal((await f.watcher.scan(BASE + 63_000)).length, 1);
     });
@@ -230,9 +232,125 @@ test('a replayed old start after cold recovery cannot replace a genuinely new tu
     event(BASE + 61_000, 'token_count', { info: { last_token_usage: { input_tokens: 20 } } }),
   ]]]);
   assert.equal((await f.watcher.scan(BASE + 62_000)).length, 0);
-  await f.append(CHILD, [start(BASE + 63_000, 'turn-two'), start(BASE + 64_000), complete(BASE + 65_000, 'turn-two')]);
+  const internal = f.watcher.sessions.get(f.paths.get(CHILD));
+  assert.equal(internal.codexTurnId, 'turn-one');
+  assert.equal(internal.codexKnownTurnIds.has('turn-one'), true);
+  assert.equal(internal.codexDetails.turn, null);
+  await f.append(CHILD, [
+    start(BASE + 63_000, 'turn-two'),
+    record(BASE + 63_100, 'turn_context', { turn_id: 'turn-two', effort: 'high' }),
+    record(BASE + 63_200, 'response_item', {
+      type: 'function_call', call_id: 'current-plan', name: 'update_plan',
+      arguments: JSON.stringify({ plan: [{ step: 'Check synthetic work', status: 'in_progress' }] }),
+    }),
+    record(BASE + 63_300, 'response_item', {
+      type: 'function_call_output', call_id: 'current-plan', output: 'Plan updated',
+    }),
+  ]);
+  assert.equal((await f.watcher.scan(BASE + 63_500)).length, 1);
+  assert.equal(internal.codexDetails.turn.id, 'turn-two');
+  assert.equal(internal.codexDetails.effort, 'high');
+  assert.equal(internal.codexDetails.plan.callId, 'current-plan');
+  const currentDetails = structuredClone(internal.codexDetails);
+  await f.append(CHILD, [start(BASE + 64_000)]);
+  assert.equal((await f.watcher.scan(BASE + 64_000)).length, 1);
+  assert.equal(internal.codexTurnId, 'turn-two');
+  assert.deepEqual(internal.codexDetails, currentDetails);
+  await f.append(CHILD, [complete(BASE + 65_000, 'turn-two')]);
   assert.equal((await f.watcher.scan(BASE + 125_000)).length, 0);
-  assert.equal(f.watcher.sessions.get(f.paths.get(CHILD)).completedAt, BASE + 65_000);
+  assert.equal(internal.completedAt, BASE + 65_000);
+  assert.equal(internal.codexDetails.turn.status, 'completed');
+});
+
+for (const termination of ['task_complete', 'turn_aborted']) {
+  for (const location of ['live append', 'cold tail']) {
+    test('a stale ' + termination + ' cannot create execution details for a recovered current turn (' + location + ')', async (t) => {
+      const stale = event(BASE + 21 * MINUTE, termination, { turn_id: 'turn-one' });
+      const f = await fixture(t, [[CHILD, [
+        meta(CHILD, BASE, PARENT),
+        record(BASE, 'unknown', { padding: 'x'.repeat(150_000) }),
+        start(BASE), complete(BASE + 1_000), start(BASE + 2_000, 'turn-two'),
+        record(BASE + 3_000, 'unknown', { padding: 'x'.repeat(300_000) }),
+        event(BASE + 4_000, 'token_count', { info: { last_token_usage: { input_tokens: 20 } } }),
+        ...(location === 'cold tail' ? [stale] : []),
+      ]]]);
+      assert.equal((await f.watcher.scan(BASE + 22 * MINUTE)).length, 1);
+      const internal = f.watcher.sessions.get(f.paths.get(CHILD));
+      assert.equal(internal.codexTurnId, 'turn-two');
+      assert.equal(internal.codexDetails.turn, null);
+      const currentDetails = structuredClone(internal.codexDetails);
+      if (location === 'live append') {
+        await f.append(CHILD, [stale]);
+        assert.equal((await f.watcher.scan(BASE + 22 * MINUTE)).length, 1);
+      }
+      assert.equal(internal.codexTurnId, 'turn-two');
+      assert.equal(internal.completedAt, null);
+      assert.equal(internal.retirementTaskActive, true);
+      assert.deepEqual(internal.codexDetails, currentDetails);
+    });
+  }
+}
+
+test('an ID-less start replay in the cold tail cannot resurrect a completed turn', async (t) => {
+  const f = await fixture(t, [[CHILD, [
+    meta(CHILD, BASE, PARENT),
+    record(BASE, 'unknown', { padding: 'x'.repeat(150_000) }),
+    event(BASE, 'task_started'), event(BASE + 1_000, 'task_complete'),
+    record(BASE + 2_000, 'unknown', { padding: 'x'.repeat(300_000) }),
+    event(BASE, 'task_started'),
+    event(BASE + 61_000, 'token_count', { info: { last_token_usage: { input_tokens: 20 } } }),
+  ]]]);
+  assert.equal((await f.watcher.scan(BASE + 62_000)).length, 0);
+  const internal = f.watcher.sessions.get(f.paths.get(CHILD));
+  assert.equal(internal.completedAt, BASE + 1_000);
+  assert.equal(internal.retirementTaskActive, false);
+  assert.equal(internal.taskActive, false);
+  assert.equal(internal.codexDetails.turn, null);
+});
+
+test('a stale context-only turn cannot undo completion or replace current execution details', async (t) => {
+  const f = await fixture(t, [[CHILD, [
+    meta(CHILD, BASE, PARENT),
+    record(BASE, 'turn_context', { turn_id: 'turn-one', model: 'old-model', effort: 'low' }),
+    record(BASE + 100, 'turn_context', { turn_id: 'turn-two', model: 'current-model', effort: 'high' }),
+    complete(BASE + 1_000, 'turn-two'),
+  ]]]);
+  assert.equal((await f.watcher.scan(BASE + 1_000)).length, 1);
+  const internal = f.watcher.sessions.get(f.paths.get(CHILD));
+  assert.equal(internal.codexExecution.turns.has('turn-one'), true);
+  assert.equal(internal.codexKnownTurnIds.has('turn-one'), false);
+  assert.equal(internal.codexDetails.turn.status, 'completed');
+  const currentDetails = structuredClone(internal.codexDetails);
+  await f.append(CHILD, [record(BASE + 2_000, 'turn_context', {
+    turn_id: 'turn-one', model: 'old-model', effort: 'low', cwd: '/workspace/old',
+  })]);
+  assert.equal((await f.watcher.scan(BASE + 61_000)).length, 0);
+  assert.equal(internal.completedAt, BASE + 1_000);
+  assert.equal(internal.completedTurnId, 'turn-two');
+  assert.equal(internal.codexTurnId, 'turn-two');
+  assert.equal(internal.model, 'current-model');
+  assert.equal(internal.cwd, '/workspace/project');
+  assert.deepEqual(internal.codexDetails, currentDetails);
+});
+
+test('a cold-tail context replay cannot revive an old context-only turn from skipped history', async (t) => {
+  const f = await fixture(t, [[CHILD, [
+    meta(CHILD, BASE, PARENT),
+    record(BASE, 'unknown', { padding: 'x'.repeat(150_000) }),
+    record(BASE, 'turn_context', { turn_id: 'turn-one', model: 'old-model', effort: 'low' }),
+    record(BASE + 100, 'turn_context', { turn_id: 'turn-two', model: 'current-model', effort: 'high' }),
+    complete(BASE + 1_000, 'turn-two'),
+    record(BASE + 2_000, 'unknown', { padding: 'x'.repeat(300_000) }),
+    record(BASE + 3_000, 'turn_context', { turn_id: 'turn-one', model: 'old-model', effort: 'low' }),
+    event(BASE + 4_000, 'token_count', { info: { last_token_usage: { input_tokens: 20 } } }),
+  ]]]);
+  assert.equal((await f.watcher.scan(BASE + 61_000)).length, 0);
+  const internal = f.watcher.sessions.get(f.paths.get(CHILD));
+  assert.equal(internal.completedAt, BASE + 1_000);
+  assert.equal(internal.completedTurnId, 'turn-two');
+  assert.equal(internal.codexTurnId, 'turn-two');
+  assert.notEqual(internal.codexDetails.turn?.id, 'turn-one');
+  assert.notEqual(internal.codexDetails.effort, 'low');
 });
 
 test('a current start after an older context remains running on cold recovery', async (t) => {
@@ -245,7 +363,12 @@ test('a current start after an older context remains running on cold recovery', 
   ]]]);
   const sessions = await f.watcher.scan(BASE + 20 * MINUTE);
   assert.equal(sessions.length, 1);
-  assert.equal(f.watcher.sessions.get(f.paths.get(CHILD)).completedAt, null);
+  const internal = f.watcher.sessions.get(f.paths.get(CHILD));
+  assert.equal(internal.completedAt, null);
+  assert.equal(internal.taskActive, true);
+  assert.deepEqual(internal.codexDetails.turn, {
+    id: 'turn-two', status: 'active', startedAt: BASE + 3_000, completedAt: null, durationMs: null,
+  });
   await f.append(CHILD, [complete(BASE + 21 * MINUTE, 'turn-two')]);
   assert.equal((await f.watcher.scan(BASE + 22 * MINUTE)).length, 0);
 });

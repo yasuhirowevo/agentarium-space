@@ -183,15 +183,17 @@ export class JsonlTail {
 
     // Avoid parsing the overlap twice for files only slightly larger than 256 KB.
     const tailStart = Math.max(headEnd + 1, size - TAIL_BYTES);
+    let startOffset = tailStart;
     let tail = await readRange(filePath, tailStart, size - 1);
     if (tailStart > 0) {
       const firstNewline = tail.indexOf(0x0a);
-      if (firstNewline === -1) return { metaRecords: headRecords, records: [], truncated: true };
+      if (firstNewline === -1) return { metaRecords: headRecords, records: [], truncated: true, startOffset: size };
+      startOffset += firstNewline + 1;
       tail = tail.subarray(firstNewline + 1);
     }
 
     const parsedTail = parseLines(tail, true);
     state.buffer = parsedTail.remainder;
-    return { metaRecords: headRecords, records: parsedTail.records, truncated: true };
+    return { metaRecords: headRecords, records: parsedTail.records, truncated: true, startOffset };
   }
 }
