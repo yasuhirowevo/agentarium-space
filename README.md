@@ -77,7 +77,7 @@ pnpm test         # Run the tests
 Environment variables:
 
 - `AGENTARIUM_PORT` — listening port (default: 41414)
-- `AGENTARIUM_WINDOW_MIN` — activity window to display, in minutes (default: 60)
+- `AGENTARIUM_WINDOW_MIN` — activity retention window, in minutes (default: 60); inactive sessions are displayed for at most 15 minutes
 - `AGENTARIUM_DEBUG` — set to 1 to print parser and other debug logs to stderr
 
 ## Reading the display
@@ -86,7 +86,8 @@ Environment variables:
 - **Orb** = a session. Warm colors = Claude Code / cool colors = Codex
 - **Ripples + bright core** = a tool is running. Its name and target appear in the nameplate status line
 - **Breathing halo** = thinking / **medium glow** = waiting for input / **dimmed + closed eyes** = idle
-- **Orbiting smaller lights** = sub-agents. They orbit their parent and disappear in a particle burst when complete; a light traveling along the parent link indicates activity
+- **Orbiting smaller lights** = sub-agents. They orbit their parent; a light traveling along the parent link indicates activity
+- Inactive sessions fade out after 15 minutes; completed Codex sub-agents and auto-reviews fade out after 60 seconds. Running work and its parents remain within the activity window, and resumed sessions reappear. Keeping a task open in its source app does not extend its display time
 - **Nameplate** = the session name and current activity (tool name: target and elapsed time). New messages appear as leader-line callouts
 - **Header HUD** = current time / status counts / SYNC (time since the last update) / events-per-minute sparkline / LINK status
 - **SECTOR label** = a project's tide pool (`SECTOR-A ─ NAME ─ N UNITS`). The full-height LIVE STREAM module shows recent activity

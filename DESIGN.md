@@ -166,6 +166,19 @@ UI 側（ui/office.js）:
   非同期起動と完了、未知のコンテキスト上限を扱う。ログ読み取り専用・外部送信ゼロ・既存の
   配置とアニメーションの制約は維持する
 
+## セッションの退場（v2.21 — 完了後の表示整理）
+
+- 通常セッションは最終活動から 15 分で表示対象から外し、既存のフェードで退場する。
+  ログの記録時刻を使い、読み取り・再起動だけで表示時間を延長しない。
+- 実行中のツール・ターン、または稼働中の子を持つ親には 15 分の退場期限を適用しない。
+  終了の証拠がない処理を時間だけで完了扱いにはせず、既存の活動ウィンドウによる上限は維持する。
+- Codex の sub-agent / auto-review は、受理したターン完了・中断から 60 秒で退場する。
+  親が表示中でも延長しない。新しいターンの開始で完了時刻を解除し、再表示する。
+  Claude の sub-agent は既存の完了通知と 60 秒の保持を維持する。
+- 非表示後に活動が再開したセッションは再表示する。ログは引き続き読み取り専用とする。
+  ソース側アプリのウィンドウ表示状態による例外は設けない。
+- 境界時刻・完了後のメタ更新・再開・稼働中の子を合成データで検証する。
+
 ## 原則
 
 - **読み取り専用**: ログファイルへの書き込み・改変・削除は一切しない
@@ -301,7 +314,7 @@ session = {
 2. pending ツール（Claude: tool_result 未着の tool_use / Codex: output 未着の function_call・custom_tool_call）あり → `tool`
 3. Claude: 直近が assistant テキストのみ かつ `now - lastActivity < 10s` → `thinking`（ストリーミング途中の可能性）、`>= 10s` → `waiting`。直近が user 発話 / tool_result → `thinking`
 4. Codex: `task_started` 後 `task_complete` / `turn_aborted` 未着 → `thinking`（pending call があれば 2 で `tool`）。`task_complete` / `turn_aborted` 後 → `waiting`
-5. 表示対象: `now - max(lastActivity, lastSidechainActivity) <= ACTIVE_WINDOW`（env `AGENTARIUM_WINDOW_MIN`、デフォルト 60 分）のセッションのみ。超えたら state からも削除（tail 状態も同時に破棄）
+5. 表示対象は v2.21 の退場ルールで決める。活動ウィンドウ（env `AGENTARIUM_WINDOW_MIN`、デフォルト 60 分）は内部状態と稼働情報の保持上限とし、通常の非稼働セッションの表示は最長 15 分とする。保持対象外なら state と tail 状態を破棄する。稼働中の子孫の所属を示す親は子孫とともに保持する。
 
 ### sub-agent
 

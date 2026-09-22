@@ -55,6 +55,10 @@ export function createSession(id, source, key) {
     toolCallsTotal: 0,
     lastMainKind: null,
     taskActive: false,
+    completedAt: null,
+    completedTurnId: null,
+    isSubAgent: false,
+    retirementTaskActive: false,
     finalMessageSeen: false,
   };
 }
@@ -244,20 +248,68 @@ export function isActiveSession(session, now, windowMs = activeWindowMs()) {
   return Boolean(latestActivity) && now - latestActivity <= windowMs;
 }
 
+export function isRunningSession(session) {
+  if (session.source === 'codex' && Number.isFinite(session.completedAt)) return false;
+  return session.pendingTools.size > 0 || session.taskActive || session.retirementTaskActive
+    || (session.source === 'claude' && session.lastMainKind && session.lastMainKind !== 'assistant_text')
+    || [...session.subAgents.values()].some((subAgent) => subAgent.status === 'running');
+}
+
+function isChildSession(session) {
+  return session.source === 'codex' && (session.isSubAgent || session.parentId || session.model === 'codex-auto-review');
+}
+
+function sessionSelection(sessionMaps, now, windowMs) {
+  const all = sessionMaps.flatMap((sessionMap) => [...sessionMap.values()]);
+  const byId = new Map(all.map((session) => [session.source + ':' + session.id, session]));
+  const retained = new Set();
+  const visible = new Set();
+  for (const session of all) {
+    if (!isActiveSession(session, now, windowMs)) continue;
+    retained.add(session);
+    if (isChildSession(session) && Number.isFinite(session.completedAt)) {
+      if (now - session.completedAt < DONE_SUB_AGENT_MS) visible.add(session);
+    } else if (isRunningSession(session)
+      || now - session.lastActivity < IDLE_AFTER_MS) {
+      visible.add(session);
+    }
+  }
+  // A live descendant keeps its complete ancestor chain, even if those logs
+  // have not changed recently. The child itself still obeys the stale limit.
+  for (const session of [...retained]) {
+    if (!isRunningSession(session)) continue;
+    let ancestor = session;
+    const visited = new Set([ancestor]);
+    while (ancestor.parentId) {
+      ancestor = byId.get(ancestor.source + ':' + ancestor.parentId);
+      if (!ancestor || visited.has(ancestor)) break;
+      visited.add(ancestor);
+      retained.add(ancestor);
+      visible.add(ancestor);
+    }
+  }
+  return { retained, visible };
+}
+
+export function isRetainedSession(session, sessionMaps, now, windowMs = activeWindowMs()) {
+  return sessionSelection(sessionMaps, now, windowMs).retained.has(session);
+}
+
 export function collectActiveSessions(
   sessionMaps,
   now,
   windowMs = activeWindowMs(),
   onEvict = (key, _session, sessionMap) => sessionMap.delete(key),
 ) {
+  const { retained, visible } = sessionSelection(sessionMaps, now, windowMs);
   const sessions = [];
   for (const sessionMap of sessionMaps) {
     for (const [key, session] of sessionMap) {
-      if (!isActiveSession(session, now, windowMs)) {
+      if (!retained.has(session)) {
         onEvict(key, session, sessionMap);
         continue;
       }
-      sessions.push(toPublicSession(session, now, windowMs));
+      if (visible.has(session)) sessions.push(toPublicSession(session, now, windowMs));
     }
   }
   return sessions.sort((left, right) => right.lastActivity - left.lastActivity);

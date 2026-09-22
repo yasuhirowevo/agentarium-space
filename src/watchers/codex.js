@@ -12,6 +12,8 @@ import {
   collectActiveSessions,
   createSession,
   isActiveSession,
+  isRetainedSession,
+  isRunningSession,
   normalizeCwd,
   observeSessionTimestamp,
   setFirstUserPrompt,
@@ -58,7 +60,7 @@ function createIgnoredWatchPath(root) {
   };
 }
 
-async function findRecentLogs(root, now) {
+async function findRecentLogs(root, now, onFile = () => {}) {
   const found = [];
 
   async function walk(directory, depth) {
@@ -74,6 +76,7 @@ async function findRecentLogs(root, now) {
       if (entry.isDirectory() && depth < 3) {
         await walk(filePath, depth + 1);
       } else if (entry.isFile() && isSessionLog(filePath, root)) {
+        onFile(filePath);
         try {
           const info = await stat(filePath);
           if (now - info.mtimeMs <= INITIAL_FILE_WINDOW_MS) found.push(filePath);
@@ -416,6 +419,7 @@ function applySessionMeta(session, record, payload) {
   const subagent = payload.source?.subagent;
   const hasSubagentSource = subagent && typeof subagent === 'object' && !Array.isArray(subagent);
   const spawn = hasSubagentSource ? subagent.thread_spawn : null;
+  session.isSubAgent = Boolean(hasSubagentSource);
   session.parentId = typeof spawn?.parent_thread_id === 'string'
     ? spawn.parent_thread_id
     : hasSubagentSource && typeof payload.parent_thread_id === 'string'
@@ -428,6 +432,13 @@ function applyRecord(session, record, fileSessionId) {
   if (!record || typeof record !== 'object') return;
   const payload = record.payload && typeof record.payload === 'object' ? record.payload : {};
   if (record.type === 'session_meta' && !acceptsSessionMeta(session, payload, fileSessionId)) return;
+  if (record.type === 'turn_context' && typeof payload.turn_id === 'string' && payload.turn_id
+    && payload.turn_id !== (session.codexTurnId ?? session.completedTurnId)) {
+    if (session.codexKnownTurnIds?.has(payload.turn_id)) return;
+    // New context invalidates old completion, but does not end active work.
+    session.completedAt = null;
+    session.completedTurnId = null;
+  }
   applyRichFields(session, record, payload);
 
   if (record.type === 'session_meta') {
@@ -446,7 +457,11 @@ function applyRecord(session, record, fileSessionId) {
     const time = touchSession(session, record.timestamp);
     if (payload.type === 'task_started') {
       const turnId = typeof payload.turn_id === 'string' ? payload.turn_id : null;
-      if (turnId && session.codexKnownTurnIds?.has(turnId)) return;
+      if (turnId && (session.codexKnownTurnIds?.has(turnId) || turnId === session.completedTurnId)) return;
+      if (!turnId && Number.isFinite(session.completedAt) && time <= session.completedAt) return;
+      session.completedAt = null;
+      session.completedTurnId = null;
+      session.retirementTaskActive = true;
       resetMessages(session);
       rememberTurn(session, turnId);
       session.codexTurnId = turnId;
@@ -458,6 +473,11 @@ function applyRecord(session, record, fileSessionId) {
         && payload.turn_id !== session.codexTurnId) return;
       rememberTurn(session, typeof payload.turn_id === 'string' ? payload.turn_id : session.codexTurnId);
       session.taskActive = false;
+      session.retirementTaskActive = false;
+      if (!Number.isFinite(session.completedAt)) {
+        session.completedAt = time;
+        session.completedTurnId = payload.turn_id ?? session.codexTurnId ?? null;
+      }
       if (payload.type === 'turn_aborted') session.pendingTools.clear();
       addRecentEvent(session, record.timestamp,
         payload.type === 'turn_aborted' ? 'Task aborted' : 'Task complete');
@@ -518,6 +538,25 @@ function applyMetaRecord(session, record, fileSessionId) {
   }
 }
 
+function isTaskBoundary(record) {
+  return record?.type === 'event_msg'
+    && ['task_started', 'task_complete', 'turn_aborted'].includes(record.payload?.type);
+}
+
+async function recoverRetirementState(filePath, endOffset) {
+  const boundaries = [];
+  // The reader walks backward under its existing 8 MiB limit. Collect only
+  // lifecycle evidence, then apply the normal acceptance rules in file order.
+  await readLatestJsonlRecord(filePath, (record) => {
+    if (isTaskBoundary(record) || record?.type === 'turn_context') boundaries.push(record);
+    return false;
+  }, { endOffset });
+  if (boundaries.length === 0) return null;
+  const recovered = createSession('', 'codex', '');
+  for (const boundary of boundaries.reverse()) applyRecord(recovered, boundary, null);
+  return recovered;
+}
+
 export function createCodexWatcher({
   root = path.join(os.homedir(), '.codex', 'sessions'),
   onUpdate = () => {},
@@ -527,6 +566,8 @@ export function createCodexWatcher({
   const tail = new JsonlTail();
   const sessions = new Map();
   const fileQueues = new Map();
+  const filePathsById = new Map();
+  let parentRestoration = Promise.resolve();
   let watcher = null;
 
   function enqueue(filePath, operation) {
@@ -544,6 +585,8 @@ export function createCodexWatcher({
 
   function processFile(filePath) {
     if (!isSessionLog(filePath, root)) return;
+    const id = rolloutUuid(filePath);
+    if (id) filePathsById.set(id, filePath);
     return enqueue(filePath, async () => {
       try {
         const result = await tail.read(filePath);
@@ -573,7 +616,18 @@ export function createCodexWatcher({
           // old tools, usage notifications, or task transitions.
           if (context) applyRecord(session, context, fileSessionId);
         }
+        const retirement = initial && (result.truncated || !result.records.some(isTaskBoundary))
+          ? await recoverRetirementState(filePath, result.endOffset)
+          : null;
         for (const record of result.records) applyRecord(session, record, fileSessionId);
+        if (retirement) {
+          // Keep public status, tools, messages and usage from normal tail replay.
+          session.retirementTaskActive = retirement.retirementTaskActive;
+          session.completedAt = retirement.completedAt;
+          session.completedTurnId = retirement.completedTurnId;
+          session.codexTurnId = retirement.codexTurnId;
+          for (const turnId of retirement.codexKnownTurnIds ?? []) rememberTurn(session, turnId);
+        }
         if (result.metaRecords.length > 0 || result.records.length > 0 || result.reset) onUpdate();
       } catch (error) {
         debug(`could not process ${filePath}`, error);
@@ -581,9 +635,36 @@ export function createCodexWatcher({
     });
   }
 
+  function restoreAncestors(now = Date.now()) {
+    parentRestoration = parentRestoration.catch(() => {}).then(async () => {
+      const visited = new Set();
+      const pending = [...sessions.values()].filter((session) => isActiveSession(session, now, windowMs)
+        && isRunningSession(session));
+      while (pending.length > 0) {
+        const session = pending.pop();
+        if (!session.parentId || visited.has(session.parentId)) continue;
+        visited.add(session.parentId);
+        let parent = [...sessions.values()].find((candidate) => candidate.id === session.parentId);
+        if (!parent) {
+          const filePath = filePathsById.get(session.parentId);
+          if (filePath) {
+            await processFile(filePath);
+            parent = sessions.get(filePath);
+          }
+        }
+        if (parent) pending.push(parent);
+      }
+    });
+    return parentRestoration;
+  }
+
   async function scan(now = Date.now()) {
-    const files = await findRecentLogs(root, now);
+    const files = await findRecentLogs(root, now, (filePath) => {
+      const id = rolloutUuid(filePath);
+      if (id) filePathsById.set(id, filePath);
+    });
     await runWithConcurrency(files, processFile);
+    await restoreAncestors(now);
     return getSessions(now);
   }
 
@@ -591,7 +672,7 @@ export function createCodexWatcher({
     return collectActiveSessions([sessions], now, windowMs, (filePath) => {
       enqueue(filePath, () => {
         const session = sessions.get(filePath);
-        if (session && isActiveSession(session, now, windowMs)) return;
+        if (session && isRetainedSession(session, [sessions], now, windowMs)) return;
         tail.forget(filePath);
         if (sessions.delete(filePath)) onUpdate();
       });
@@ -606,10 +687,16 @@ export function createCodexWatcher({
       ignoreInitial: true,
       persistent: true,
     });
-    watcher.on('add', processFile);
-    watcher.on('change', processFile);
+    const processChangedFile = async (filePath) => {
+      await processFile(filePath);
+      await restoreAncestors();
+    };
+    watcher.on('add', processChangedFile);
+    watcher.on('change', processChangedFile);
     watcher.on('unlink', (filePath) => {
       if (!isSessionLog(filePath, root)) return;
+      const id = rolloutUuid(filePath);
+      if (filePathsById.get(id) === filePath) filePathsById.delete(id);
       enqueue(filePath, () => {
         tail.forget(filePath);
         if (sessions.delete(filePath)) onUpdate();
