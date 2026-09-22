@@ -362,27 +362,38 @@ function writeAccessFor(sandboxPolicy) {
   return null;
 }
 
+function observeUsageTurn(session, turnId) {
+  if (typeof turnId === 'string' && turnId) {
+    session.codexUsageTurnIds ??= new Set();
+    if (session.codexUsageTurnIds.has(turnId)) return;
+    session.codexUsageTurnIds.add(turnId);
+    if (session.codexUsageTurnIds.size > 128) {
+      session.codexUsageTurnIds.delete(session.codexUsageTurnIds.values().next().value);
+    }
+    if (session.codexKnownTurnIds?.has(turnId)) return;
+  }
+  session.codexTurnSequence = (session.codexTurnSequence ?? 0) + 1;
+}
+
 function applyRichFields(session, record, payload) {
   observeSessionTimestamp(session, record.timestamp ?? payload.timestamp);
   if (record.type === 'session_meta' && typeof payload.originator === 'string') {
     session.originator = payload.originator;
   }
   if (record.type === 'turn_context') {
-    if (typeof payload.turn_id === 'string' && payload.turn_id !== session.codexContextTurnId) {
-      // Head metadata and recovered context can identify a new usage epoch even
-      // when its task_started record was outside the bounded read.
-      if (payload.turn_id !== session.codexTurnId) {
-        session.codexTurnSequence = (session.codexTurnSequence ?? 0) + 1;
-      }
-      session.codexContextTurnId = payload.turn_id;
-    }
+    if (typeof payload.turn_id === 'string' && payload.turn_id) observeUsageTurn(session, payload.turn_id);
     if (typeof payload.model === 'string') session.model = payload.model;
     if (Object.hasOwn(payload, 'sandbox_policy')) {
       session.writeAccess = writeAccessFor(payload.sandbox_policy);
     }
     if (typeof payload.approval_policy === 'string') session.approvalPolicy = payload.approval_policy;
   }
-  if (record.type === 'event_msg') applyTokenMetadata(session, payload);
+  if (record.type === 'event_msg') {
+    // Usage boundaries apply to historical head metadata as well, without
+    // replaying task state or counting the same start/context identity twice.
+    if (payload.type === 'task_started') observeUsageTurn(session, payload.turn_id);
+    applyTokenMetadata(session, payload);
+  }
   if (record.type === 'response_item'
     && (payload.type === 'function_call' || payload.type === 'custom_tool_call')) {
     addToolCall(session, payload.name);
@@ -436,9 +447,6 @@ function applyRecord(session, record, fileSessionId) {
     if (payload.type === 'task_started') {
       const turnId = typeof payload.turn_id === 'string' ? payload.turn_id : null;
       if (turnId && session.codexKnownTurnIds?.has(turnId)) return;
-      if (!session.taskActive || !payload.turn_id || payload.turn_id !== session.codexTurnId) {
-        session.codexTurnSequence = (session.codexTurnSequence ?? 0) + 1;
-      }
       resetMessages(session);
       rememberTurn(session, turnId);
       session.codexTurnId = turnId;

@@ -539,6 +539,38 @@ test('recovering context from the same turn does not manufacture a usage reset',
   assert.equal(session.contextUsedTokens, 1_000);
 });
 
+for (const large of [false, true]) {
+  for (const format of ['idless', 'start-only', 'context-before', 'context-after']) {
+    test(`counts observed usage boundaries with ${format} in ${large ? 'head metadata' : 'normal records'}`, async (t) => {
+      const f = await fixture(t);
+      const start = (id) => f.event({ type: 'task_started',
+        ...(format === 'idless' ? {} : { turn_id: id }) });
+      const context = (id) => f.record('turn_context', { turn_id: id });
+      await f.append([
+        start('old-turn'), f.event(usage(100, 1_000)),
+        f.event({ type: 'task_complete', turn_id: 'old-turn' }),
+        ...(format === 'context-before' ? [context('current-turn'), f.event(usage(20, 200))] : []),
+        start('current-turn'),
+        ...(format === 'context-after' ? [context('current-turn')] : []),
+        f.event(usage(20, 200)),
+        ...(format === 'idless' ? [] : [start('old-turn'), start('current-turn')]),
+        f.event(usage(15, 150)), // Replayed starts must not turn stale usage into a reset.
+        ...(large ? [f.record('unknown_record', { padding: 'x'.repeat(400_000) })] : []),
+        f.event(usage(35, 350, 15)),
+      ]);
+      let session = await f.scan();
+      assert.equal(session.outputTokensTotal, 135);
+      assert.equal(session.contextUsedTokens, 350);
+      assert.equal(session.status, large ? 'waiting' : 'thinking');
+      assert.equal(session.activity, null);
+      await f.append([f.event(usage(50, 500, 15))]);
+      session = await f.scan();
+      assert.equal(session.outputTokensTotal, 150);
+      assert.equal(session.contextUsedTokens, 500);
+    });
+  }
+}
+
 test('metadata recovery does not read a new turn appended after the tail snapshot', async (t) => {
   const f = await fixture(t);
   await f.append([
