@@ -114,16 +114,17 @@ export function setSessionTitle(session, field, value) {
   session[field] = Array.from(value).slice(0, 120).join('');
 }
 
-export function setLastMessage(session, value, time, kind = 'final') {
+export function setLastMessage(session, value, time, kind = 'final', { deduplicate = true } = {}) {
   if (typeof value !== 'string' || !Number.isFinite(time)) return;
   const compact = value.replace(/\s+/g, ' ').trim();
   if (!compact) return;
   const message = Array.from(compact).slice(0, 60).join('');
   const messageKind = MESSAGE_KINDS.has(kind) ? kind : 'final';
-  if (session.lastMessage === message && session.lastMessageKind === messageKind) return;
+  if (deduplicate && session.lastMessage === message && session.lastMessageKind === messageKind) return;
   session.lastMessage = message;
   session.lastMessageAt = time;
   session.lastMessageKind = messageKind;
+  return true;
 }
 
 export function addRecentEvent(session, timestamp, label) {

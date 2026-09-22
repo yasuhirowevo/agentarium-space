@@ -49,6 +49,58 @@ function readRange(filePath, start, end) {
   });
 }
 
+// Recover sparse metadata without replaying skipped activity or reading an unbounded log.
+export async function readLatestJsonlRecord(filePath, predicate, {
+  maxBytes = 8 * 1024 * 1024, endOffset,
+} = {}) {
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) return null;
+  try {
+    const info = await stat(filePath);
+    const size = endOffset === undefined ? info.size : Math.min(info.size, endOffset);
+    if (!Number.isSafeInteger(size) || size < 0) return null;
+    const limit = Math.max(0, size - Math.min(Math.floor(maxBytes), 8 * 1024 * 1024));
+    let cursor = size;
+    let remainder = Buffer.alloc(0);
+    let hasLineEnd = false;
+    const match = (line) => {
+      try {
+        const record = JSON.parse(line.toString('utf8'));
+        return predicate(record) ? record : null;
+      } catch {
+        return null;
+      }
+    };
+
+    while (cursor > limit) {
+      const start = Math.max(limit, cursor - TAIL_BYTES);
+      let buffer = Buffer.concat([await readRange(filePath, start, cursor - 1), remainder]);
+      cursor = start;
+      // A final line without a newline is still being written. Never parse it early.
+      if (!hasLineEnd) {
+        const lastNewline = buffer.lastIndexOf(0x0a);
+        if (lastNewline === -1) {
+          remainder = buffer;
+          continue;
+        }
+        buffer = buffer.subarray(0, lastNewline);
+        hasLineEnd = true;
+      }
+      let end = buffer.length;
+      for (let index = end - 1; index >= 0; index -= 1) {
+        if (buffer[index] !== 0x0a) continue;
+        const record = match(buffer.subarray(index + 1, end));
+        if (record !== null) return record;
+        end = index;
+      }
+      remainder = buffer.subarray(0, end);
+      if (cursor === 0) return match(remainder);
+    }
+  } catch (error) {
+    debug('could not recover JSONL metadata', error);
+  }
+  return null;
+}
+
 export class JsonlTail {
   #files = new Map();
 
@@ -75,7 +127,7 @@ export class JsonlTail {
       try {
         const initial = await this.#readInitial(filePath, fileStat.size, state);
         this.#files.set(filePath, state);
-        return { ...initial, reset };
+        return { ...initial, reset, endOffset: fileStat.size };
       } catch (error) {
         debug(`could not read ${filePath}`, error);
         return { metaRecords: [], records: [], reset };

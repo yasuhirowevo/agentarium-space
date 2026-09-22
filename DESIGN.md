@@ -126,6 +126,46 @@ UI 側（ui/office.js）:
 制約: v2.13 の描画順・衝突回避・fillText・expLerp・reduced-motion をそのまま使う。
 新しい常設要素、背景ボックス、点滅、レイアウト再配置は追加しない。
 
+## セッションログ互換性（v2.20 — 2026-09）
+
+- Codex の発話は従来の `event_msg.user_message` / `agent_message` に加え、
+  `event_msg.item_completed` の `UserMessage` / `AgentMessage` と
+  `response_item.message` の assistant text を受理する。ユーザー由来タイトルは実ユーザーイベントから取得し、
+  system / developer / analysis / ツール宛てメッセージや埋め込みコンテキストを発話として表示しない。
+  同じ発話の複数形式での記録は発話 ID と全文で重複判定する。ID が異なる同文の発話や、
+  同じ先頭部分を持つ別の発話では表示時刻を更新し、ID がない形式は全文で照合する。
+  ID なしの同文で時刻を維持した後も、別 ID が確認できた場合はその発話の時刻を反映する。
+  先頭領域の履歴用の重複状態を末尾の現在ターンへ持ち越さず、現在の発話には末尾の時刻を使う。
+  commentary / final と最終回答保護は維持する
+- Codex の `turn_aborted` は実行中ターンとその pending tools を終了させる。
+  ターン ID がある場合は別ターンの終了通知で現在の作業を終了させない。
+  通常処理で受理した開始・終了の直近 128 ターン ID を保持し、その ID の開始再通知では
+  現在のターン、最終回答の保護、終了済み状態を変更しない。開始が読取範囲外でも、終了を受理すれば対象とする
+- Codex の初回読み取りで `turn_context` が末尾の読取範囲に存在しない場合は、
+  追加読取量を最大 8MiB に制限して末尾側から最新の `turn_context` を探し、モデル・権限・cwd と
+  終了通知の照合用ターン ID を回収する。回収範囲は通常読取と同じ末尾位置までに固定し、
+  読取途中に追記された次ターンの情報を先取りしない。
+  この回収はメタ情報だけに適用し、古いツール呼び出し・使用量・状態遷移は再生しない
+- Claude の Agent / Task の非同期起動応答（`isAsync` / `async_launched`）は sub-agent の完了にしない。
+  起動応答の agent ID と実際の完了通知を対応させて running / done を更新する。
+  親の通常ツール待ちと子のバックグラウンド稼働を区別し、親の最終回答後も子の状態を保持する。
+  終了の証拠がない子を時間だけで完了にせず、表示ウィンドウと既存の完了後 60 秒の保持を維持する。
+  大きなログの初回読込では子の起動が末尾の読取範囲にある場合に追跡し、先頭の古い起動を再生しない
+- 出力トークンは Claude の同一 message ID の繰り返しと、Codex の同じ累積 usage の再通知を
+  重複加算しない。増分更新・別応答・ログ初回読み込みと追記・truncate を区別する。
+  Codex の計数用ターン境界は先頭メタ領域でも `task_started` から取得し、
+  開始と `turn_context` で観測した直近 128 ターン ID の重複では境界を進めない。
+  計数用の境界取得は pending ツールや現在の実行状態を変更しない。
+  先頭と末尾の間でターン開始が省略されても、turn_context の ID 変更と累積値の減少から
+  観測可能なカウンターのリセットを識別する。
+  数値が不明なときは推定値を生成しない
+- Claude のコンテキスト上限 200k 固定近似を廃止する。ログから上限を確定できない場合は
+  `contextWindowTokens: null` とし、Canvas は `CTX 123k` 等の使用量を表示する。
+  上限が不明なリングは描画せず、既知の上限を持つ Codex 等の割合表示は維持する
+- 回帰検証は個人のログ本文を含まない合成 fixture で新旧形式、重複、途中終了、大きなレコード、
+  非同期起動と完了、未知のコンテキスト上限を扱う。ログ読み取り専用・外部送信ゼロ・既存の
+  配置とアニメーションの制約は維持する
+
 ## 原則
 
 - **読み取り専用**: ログファイルへの書き込み・改変・削除は一切しない
@@ -187,8 +227,7 @@ agentarium-space/
 - 共通フィールド（user/assistant 等に付く）: `timestamp`(ISO8601) / `sessionId` / `cwd`(Windows 形式 `C:\\...`) / `gitBranch` / `version` / `isSidechain`(bool)
 - `assistant`: `message.content[]` に `{type:"text"|"thinking"|"tool_use"}`。`tool_use = {id, name, input}`
 - `user`: 実ユーザー発話のほか、`message.content[]` に `{type:"tool_result", tool_use_id}` を含む「ツール完了」レコードが来る
-- **sub-agent**: `name === "Agent"`（旧バージョン互換で `"Task"` も）の tool_use。`input: {description, subagent_type, run_in_background, prompt}`。対応する `tool_result` が来るまで「稼働中 sub-agent」とみなす
-  - 制約: `run_in_background: true` の agent は tool_result が早期に返るため追跡できない場合がある（v1 の既知の限界として README に記載）
+- **sub-agent**: `name === "Agent"`（旧バージョン互換で `"Task"` も）の tool_use。`input: {description, subagent_type, run_in_background, prompt}`。同期実行では対応する `tool_result` まで、非同期実行では agent ID に対応する完了通知まで稼働中とする（v2.20）
 - **タイトル**: `{"type":"custom-title","customTitle":"..."}` > `{"type":"ai-title","aiTitle":"..."}`（custom 優先・同種は後勝ち）
 - `isSidechain: true` のレコードは sub-agent 側の発話。メインセッションの status・lastActivity には影響させず、`lastSidechainActivity` のみ更新する（表示ウィンドウ判定にだけ使う。main が waiting なのに sidechain の追記で thinking 表示になる誤判定を防ぐ）
 
@@ -214,16 +253,17 @@ agentarium-space/
 - `type === "turn_context"`: `payload = {turn_id, cwd, workspace_roots, ...}`（cwd の最新値として利用）
 - `type === "event_msg"`: `payload.type` ∈ `task_started` / `task_complete` / `agent_message` / `user_message` / `token_count` / `sub_agent_activity {agent_thread_id, agent_path, kind:"started"|...}` / `patch_apply_end` / 他
 - `type === "response_item"`: `payload.type` ∈ `function_call {name, arguments, call_id?}` / `function_call_output` / `custom_tool_call` / `custom_tool_call_output` / `reasoning` / `message` / 他
-- ステータス材料: `task_started`（ターン開始）〜 `task_complete`（ターン終了）。ターン中の直近 `function_call` / `custom_tool_call` の `name` を「現在の作業」として表示
+- ステータス材料: `task_started`（ターン開始）〜 `task_complete` / `turn_aborted`（ターン終了）。ターン中の直近 `function_call` / `custom_tool_call` の `name` を「現在の作業」として表示
 
 ## 増分読み取り（tail.js）
 
 - ファイルごとに `{offset, 部分行バッファ}` を保持。chokidar の `add`/`change` で offset から読み足す（`fs.createReadStream(path, {start: offset})`）
 - 行区切りは `\n`。最終行が未完でも部分行バッファに保持し次回結合。`JSON.parse` 失敗行は捨てる
 - **初回発見時（巨大ファイル対策）**: サイズが 256KB 超なら「先頭 128KB + 末尾 256KB」だけパースし、offset をファイル末尾へ。256KB 以下なら全量パース
-  - 先頭 128KB は**メタ抽出専用**（session_meta / タイトル / cwd / parentId。Codex の session_meta 1 行は実測最大 42KB 程度あるため 8KB では不足）。**pending ツールや status 判定には使わない**（中間の脱落により result と突き合わせられず pending が固着するため）
+  - 先頭 128KB は**メタ抽出専用**（session_meta / タイトル / cwd / parentId。大きな session_meta にも対応するため 8KB より広く確保）。**pending ツールや status 判定には使わない**（中間の脱落により result と突き合わせられず pending が固着するため）
   - 既知の限界（許容）: 末尾 256KB 内に改行が 1 つもない巨大単一行はそのレコードを取りこぼす（以降は自己回復する）。末尾領域の開始が偶然レコード境界だった場合も先頭 1 レコードを捨てる。いずれも影響は最大 1 レコードで、完全対処は過剰設計と判断
   - 末尾 256KB の読み始めは次の改行の直後から（壊れた部分行を捨てる）
+- Codex の `turn_context` の回収は v2.20 の上限付き追加読取で補う
 - ファイル縮小（truncate）検知時は offset を 0 にリセットして読み直し
 - 対象: 起動時スキャンで **mtime が 24 時間以内**の `.jsonl` のみ。それより古いファイルは無視（watch で change が来たら拾う）
 - **セッションが表示ウィンドウ超えで prune されるときは、対応する tail 状態（offset / buffer）も破棄する**。長時間稼働でのリーク防止と、再活性化時に初回読み直しとなることで先頭のメタ（session_meta / タイトル / parentId）を再取得できる効果を兼ねる
@@ -260,12 +300,12 @@ session = {
    - レコード timestamp は取り込み時に `now + 60s` を上限にクランプする（未来 timestamp による status 固着・prune 不能を防ぐ）
 2. pending ツール（Claude: tool_result 未着の tool_use / Codex: output 未着の function_call・custom_tool_call）あり → `tool`
 3. Claude: 直近が assistant テキストのみ かつ `now - lastActivity < 10s` → `thinking`（ストリーミング途中の可能性）、`>= 10s` → `waiting`。直近が user 発話 / tool_result → `thinking`
-4. Codex: `task_started` 後 `task_complete` 未着 → `thinking`（pending call があれば 2 で `tool`）。`task_complete` 後 → `waiting`
+4. Codex: `task_started` 後 `task_complete` / `turn_aborted` 未着 → `thinking`（pending call があれば 2 で `tool`）。`task_complete` / `turn_aborted` 後 → `waiting`
 5. 表示対象: `now - max(lastActivity, lastSidechainActivity) <= ACTIVE_WINDOW`（env `AGENTARIUM_WINDOW_MIN`、デフォルト 60 分）のセッションのみ。超えたら state からも削除（tail 状態も同時に破棄）
 
 ### sub-agent
 
-- Claude: pending の `Agent`/`Task` tool_use → `{id: tool_use.id, label: input.description || subagent_type, status:'running'}`。tool_result 到着で `done`（60 秒後にリストから除去）
+- Claude: pending の `Agent`/`Task` tool_use → `{id: tool_use.id, label: input.description || subagent_type, status:'running'}`。同期の tool_result または非同期の完了通知で `done`（60 秒後にリストから除去）
 - Codex: sub-agent rollout ファイル自体が session として入る（`parentId` 付き）。UI 側で親デスクの横に nest 表示。`sub_agent_activity` イベントは補助情報（v1 では未使用でよい）
 
 ## 配信（server.js）
@@ -413,18 +453,18 @@ UI 側:
 
 コア側（公開フィールド追加・null 許容）:
 
-- `contextUsedTokens` / `contextWindowTokens` — Claude: assistant の `message.usage`（input + cache_creation + cache_read）を used に、window は既定 200000 の定数（近似である旨コメント）。Codex: `token_count` の `info.last_token_usage.input_tokens` を used に（`cached_input_tokens` は input_tokens の部分集合なので加算しない。v2.11 で修正）、`task_started` の `model_context_window` を window に
+- `contextUsedTokens` / `contextWindowTokens` — Claude: assistant の `message.usage`（input + cache_creation + cache_read）を used に、window は上限を確定できないため null（v2.20）。Codex: `token_count` の `info.last_token_usage.input_tokens` を used に（`cached_input_tokens` は input_tokens の部分集合なので加算しない。v2.11 で修正）、`task_started` または `token_count.info` の `model_context_window` を window に
 - 大ファイル初回のメタ専用適用でも token 系は更新してよい（pending/status に影響しない表示メタデータ）
 
 UI 側:
 
 1. **コンテキストリング**: orb 半径 +4px に細い円弧（線幅 1.2px・12 時起点・時計回り = 使用率）。〜60% は source 色 35%、60〜80% は白 45%、80% 超は琥珀。used が null なら非表示。状態行末尾に `CTX 42%`（白 40%）を付記
-   - **フォールバック（v2.6 修正）**: `used > window` のとき（Claude の近似窓 200000 が実モデルの窓より小さい場合に発生）は嘘の 100% を出さず、リングを非表示にして `CTX 523k` の実トークン数表示に切り替える
+   - **フォールバック（v2.20）**: window が不明、または `used > window` のときは嘘の 100% を出さず、リングを非表示にして `CTX 523k` の実トークン数表示に切り替える
 2. **最新発話の常時 1 行**: 非 idle の orb のネームプレート 3 行目に `lastMessage` 先頭 ~26 文字（白 35%・9px）を常時表示。吹き出し（v2.2）は出現演出として併存
 3. **セクター統計行**: pool ラベルの 3 行目に `N ACTIVE · M EV/MIN · LAST HH:MM`（ACTIVE = tool + thinking 数 / EV/MIN = pool 単位のイベント毎分・クライアント集計 / LAST = pool 内最新 lastActivity。白 40%・9px）
 4. **ツリー行ミニタイムライン**: パネル（全体ビュー・セッションビュー両方）のセッション行右端に、クライアント観測のステータス履歴を 48×6px の色帯で常時表示
 
-制約: 実データ駆動・null 安全。README の注意に Claude の window 既定値が近似である旨を 1 行追記。
+制約: 実データ駆動・null 安全。上限不明時の表示は README の注意にも記載する。
 
 ### デュアルレール（v2.8 — モジュールの左右分散）
 
@@ -466,7 +506,7 @@ UI 側:
 - `writeAccess: 'write' | 'read' | null` — Codex: turn_context の `sandbox_policy` が write を含めば 'write'、read-only なら 'read'。Claude は null
 - `approvalPolicy` — Codex: turn_context の `approval_policy`
 - `originator` — Codex: session_meta の `originator` / Claude: `version`（CLI バージョン）を流用
-- `outputTokensTotal` — 各応答の output_tokens を累積（Claude: usage.output_tokens / Codex: token_count の last_token_usage.output_tokens をイベントごとに加算）
+- `outputTokensTotal` — 出力トークンの累積（Claude: message ID ごとに重複排除、Codex: token_count の累積 usage を優先。v2.20）
 - `startedAt` — 最初に観測したレコードの timestamp（メタ専用適用の先頭領域を含む最小値）
 - `toolCounts`（上位 3 件 [{name, count}]）+ `toolCallsTotal` — ツール呼び出しの名前別累積
 

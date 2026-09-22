@@ -20,8 +20,7 @@ import {
 } from '../state.js';
 
 const INITIAL_FILE_WINDOW_MS = 24 * 60 * 60 * 1000;
-// Claude Code logs do not expose the model window, so this default is an approximation.
-const CLAUDE_CONTEXT_WINDOW = 200000;
+const outputTokensByMessage = new WeakMap();
 
 function debug(message, error) {
   if (process.env.AGENTARIUM_DEBUG) console.error(`[claude] ${message}`, error ?? '');
@@ -109,7 +108,22 @@ function applyTokenUsage(session, record) {
   if (record.type !== 'assistant') return;
   const usage = record.message?.usage;
   if (!usage || typeof usage !== 'object') return;
-  addOutputTokens(session, usage.output_tokens);
+  if (Number.isFinite(usage.output_tokens)) {
+    const tokens = Math.max(0, usage.output_tokens);
+    const messageId = record.message?.id;
+    if (typeof messageId === 'string' && messageId) {
+      let messages = outputTokensByMessage.get(session);
+      if (!messages) {
+        messages = new Map();
+        outputTokensByMessage.set(session, messages);
+      }
+      const previous = messages.get(messageId) ?? 0;
+      addOutputTokens(session, Math.max(0, tokens - previous));
+      messages.set(messageId, Math.max(previous, tokens));
+    } else {
+      addOutputTokens(session, tokens);
+    }
+  }
   const values = [
     usage.input_tokens,
     usage.cache_creation_input_tokens,
@@ -120,15 +134,15 @@ function applyTokenUsage(session, record) {
     (total, value) => total + (Number.isFinite(value) ? Math.max(0, value) : 0),
     0,
   );
-  session.contextWindowTokens = CLAUDE_CONTEXT_WINDOW;
+  // The transcript does not provide the effective model window.
+  session.contextWindowTokens = null;
 }
 
 function applyRichFields(session, record) {
   observeSessionTimestamp(session, record.timestamp);
   if (typeof record.version === 'string') session.originator = record.version;
   if (record.type !== 'assistant') return;
-  // sidechain (sub-agent) は別コンテキストなので、main の CTX / model を汚染しない
-  // （OUT トークン・ツール数は「セッション総量」として sidechain 分も算入する）
+  // Sidechains have independent usage and models; keep the main session isolated.
   if (record.isSidechain !== true) {
     if (typeof record.message?.model === 'string') session.model = record.message.model;
     applyTokenUsage(session, record);
@@ -177,6 +191,66 @@ function toolEventLabel(tool, done = false) {
   return done ? `${target} done` : target;
 }
 
+function registerSubAgent(session, toolUse, time) {
+  if ((toolUse?.name !== 'Agent' && toolUse?.name !== 'Task')
+    || typeof toolUse.id !== 'string') return;
+  const input = toolUse.input && typeof toolUse.input === 'object' ? toolUse.input : {};
+  if (session.subAgents.has(toolUse.id)) return;
+  session.subAgents.set(toolUse.id, {
+    id: toolUse.id,
+    label: input.description || input.subagent_type || toolUse.name,
+    status: 'running',
+    startedAt: time ?? session.lastActivity,
+  });
+}
+
+function applySubAgentResult(session, result, record, time) {
+  const launch = record.toolUseResult;
+  const isAsync = launch?.isAsync === true || launch?.status === 'async_launched';
+  let subAgent = session.subAgents.get(result.tool_use_id);
+  // The initial tail may contain a launch result whose call was in the skipped middle.
+  if (!subAgent && isAsync && typeof result.tool_use_id === 'string'
+    && typeof launch.agentId === 'string' && launch.agentId) {
+    subAgent = {
+      id: result.tool_use_id,
+      label: typeof launch.description === 'string' && launch.description
+        ? launch.description
+        : 'Agent',
+      status: 'running',
+      startedAt: time ?? session.lastActivity,
+    };
+    session.subAgents.set(subAgent.id, subAgent);
+  }
+  if (!subAgent) return false;
+  if (isAsync) {
+    if (typeof launch.agentId === 'string') subAgent.agentId = launch.agentId;
+  } else {
+    subAgent.status = 'done';
+    subAgent.doneAt = time ?? session.lastActivity;
+  }
+  return isAsync;
+}
+
+function applyTaskNotification(session, record) {
+  if (record.type !== 'user' || record.origin?.kind !== 'task-notification') return false;
+  const time = touchSession(session, record.timestamp, true);
+  for (const item of messageContent(record)) {
+    if (item?.type !== 'text' || typeof item.text !== 'string') continue;
+    // Only read the notification header, never XML-looking content in the result.
+    const header = item.text.match(/^\s*<task-notification>([\s\S]*?)(?:<summary>|<result>|<\/task-notification>)/)?.[1];
+    if (!header) continue;
+    const agentId = header.match(/<task-id>([^<]+)<\/task-id>/)?.[1]?.trim();
+    const status = header.match(/<status>([^<]+)<\/status>/)?.[1]?.trim();
+    if (!agentId || !['completed', 'failed', 'stopped'].includes(status)) continue;
+    for (const subAgent of session.subAgents.values()) {
+      if (subAgent.agentId !== agentId || subAgent.status === 'done') continue;
+      subAgent.status = 'done';
+      subAgent.doneAt = time ?? session.lastSidechainActivity;
+    }
+  }
+  return true;
+}
+
 function applyRecord(session, record) {
   if (!record || typeof record !== 'object') return;
   applyRichFields(session, record);
@@ -195,6 +269,7 @@ function applyRecord(session, record) {
     setSessionTitle(session, 'aiTitle', record.aiTitle);
     return;
   }
+  if (applyTaskNotification(session, record)) return;
   if (record.type !== 'user' && record.type !== 'assistant') return;
 
   const time = touchSession(session, record.timestamp);
@@ -205,12 +280,11 @@ function applyRecord(session, record) {
     for (const result of toolResults) {
       const tool = session.pendingTools.get(result.tool_use_id);
       session.pendingTools.delete(result.tool_use_id);
-      const subAgent = session.subAgents.get(result.tool_use_id);
-      if (subAgent) {
-        subAgent.status = 'done';
-        subAgent.doneAt = time ?? session.lastActivity;
+      const isAsync = applySubAgentResult(session, result, record, time);
+      if (tool) {
+        const label = isAsync ? `${toolEventLabel(tool)} started` : toolEventLabel(tool, true);
+        addRecentEvent(session, record.timestamp, label);
       }
-      if (tool) addRecentEvent(session, record.timestamp, toolEventLabel(tool, true));
     }
 
     if (toolResults.length === 0) {
@@ -234,14 +308,7 @@ function applyRecord(session, record) {
     session.pendingTools.set(toolUse.id, tool);
     addRecentEvent(session, record.timestamp, toolEventLabel(tool));
 
-    if (name === 'Agent' || name === 'Task') {
-      session.subAgents.set(toolUse.id, {
-        id: toolUse.id,
-        label: input.description || input.subagent_type || name,
-        status: 'running',
-        startedAt,
-      });
-    }
+    registerSubAgent(session, toolUse, time);
   }
 
   const assistantText = content
@@ -271,6 +338,7 @@ function applyMetaRecord(session, record) {
     setSessionTitle(session, 'aiTitle', record.aiTitle);
     return;
   }
+  if (applyTaskNotification(session, record)) return;
   if (record.type !== 'user' && record.type !== 'assistant') return;
 
   const time = touchSession(session, record.timestamp);
