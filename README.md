@@ -110,10 +110,12 @@ Environment variables:
   It depends on each CLI's internal log format, so CLI updates may break the display;
   unknown formats are ignored so the app can keep running
 - Only use session logs that you are authorized to read
-- Claude Code sub-agents launched with `run_in_background` may not be trackable
-  (known limitation)
-- Claude context-window usage is approximated using a default window size of
-  200000 tokens
+- Background Claude Code sub-agents are tracked through their launch and completion
+  notifications. Missing completion notifications leave their status running until
+  the session leaves the display window. On initial load of a large log, child
+  launches outside the recent tail are not reconstructed
+- When logs do not expose a context-window limit, context usage is shown as a
+  token count without a percentage ring
 
 ## License
 

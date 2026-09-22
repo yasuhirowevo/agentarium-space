@@ -1,3 +1,4 @@
+import { contextLabel, contextUsage } from './context-metrics.js';
 import {
   normalizeMessageKind,
   shouldBootstrapSpotlight,
@@ -241,26 +242,6 @@ function isLongRunning(session, now = Date.now()) {
 
 function projectKey(session) {
   return `${session.projectName || '名称未取得'}\u0000${session.cwd || 'unknown'}`;
-}
-
-function contextUsage(session) {
-  if (!Number.isFinite(session?.contextUsedTokens)
-    || !Number.isFinite(session?.contextWindowTokens)
-    || session.contextUsedTokens < 0
-    || session.contextWindowTokens <= 0) return null;
-  if (session.contextUsedTokens > session.contextWindowTokens) return null;
-  return clamp(session.contextUsedTokens / session.contextWindowTokens, 0, 1);
-}
-
-function contextLabel(session) {
-  if (!Number.isFinite(session?.contextUsedTokens)
-    || !Number.isFinite(session?.contextWindowTokens)
-    || session.contextUsedTokens < 0
-    || session.contextWindowTokens <= 0) return '';
-  if (session.contextUsedTokens > session.contextWindowTokens) {
-    return `CTX ${Math.round(session.contextUsedTokens / 1000)}k`;
-  }
-  return `CTX ${Math.round(session.contextUsedTokens / session.contextWindowTokens * 100)}%`;
 }
 
 function normalizedSession(session) {
