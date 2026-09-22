@@ -179,6 +179,7 @@ UI 側（ui/office.js）:
   ソース側アプリのウィンドウ表示状態による例外は設けない。
 - 境界時刻・完了後のメタ更新・再開・稼働中の子を合成データで検証する。
 
+
 ## Codex execution details（v2.22 — 観測した作業結果）
 
 Issue #16 の情報は FOCUS / LIVE STREAM / AGENT TREE に置き、Canvas・既存の発話・
@@ -284,10 +285,9 @@ Sources: [App Server](https://learn.chatgpt.com/docs/app-server),
 初回の先頭128KiBは従来のメタ情報専用とし、上記の作業・履歴を再生しない。末尾256KiBと
 以後の追記が観測対象で、追加の全ログ走査は行わない。既存の最大8MiBの turn_context 回収は
 effort と turn ID の補助に使えるが active な開始イベントとしては扱わない。
-退場判定で回収したターン境界は、古い開始・終了の再通知を詳細へ適用する前の判定にも使う。
-回収した境界から読取範囲外の実行詳細を公開せず、却下した context で完了時刻を解除しない。
-初回は末尾の最初の完全行より前の境界を先に受理判定へ反映し、その後に末尾を適用する。
-境界回収は初回 snapshot の末尾から最大8MiBの範囲内に保つ。
+Retirement recovery and detail reducers share lifecycle acceptance: replayed starts and stale
+contexts must not replace the current details, including IDs recovered from skipped history.
+A recovered current ID establishes only an unknown detail turn; skipped timings and work are not replayed.
 truncate では観測状態をリセットし、重複判定の item ID は直近256件、turn ID は128件まで。
 公開 snapshot の再接続はサーバーの状態を引き継ぐが、サーバー再起動や読取範囲外の履歴は unavailable。
 

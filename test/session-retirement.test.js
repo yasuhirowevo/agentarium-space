@@ -216,7 +216,9 @@ for (const repeated of ['task_complete', 'task_started']) {
       assert.equal(internal.completedAt, doneAt);
       assert.equal(internal.retirementTaskActive, false);
       assert.equal(internal.taskActive, false);
-      if (repeated === 'task_started') assert.equal(internal.codexDetails.turn, null);
+      if (repeated === 'task_started') assert.deepEqual(internal.codexDetails.turn, {
+        id: 'turn-one', status: 'unknown', startedAt: null, completedAt: null, durationMs: null,
+      });
       await f.append(CHILD, [start(BASE + 63_000, 'turn-two')]);
       assert.equal((await f.watcher.scan(BASE + 63_000)).length, 1);
     });
@@ -235,10 +237,12 @@ test('a replayed old start after cold recovery cannot replace a genuinely new tu
   const internal = f.watcher.sessions.get(f.paths.get(CHILD));
   assert.equal(internal.codexTurnId, 'turn-one');
   assert.equal(internal.codexKnownTurnIds.has('turn-one'), true);
-  assert.equal(internal.codexDetails.turn, null);
+  assert.deepEqual(internal.codexDetails.turn, {
+    id: 'turn-one', status: 'unknown', startedAt: null, completedAt: null, durationMs: null,
+  });
   await f.append(CHILD, [
     start(BASE + 63_000, 'turn-two'),
-    record(BASE + 63_100, 'turn_context', { turn_id: 'turn-two', effort: 'high' }),
+    record(BASE + 63_100, 'turn_context', { turn_id: 'turn-two', model: 'current-model', effort: 'high' }),
     record(BASE + 63_200, 'response_item', {
       type: 'function_call', call_id: 'current-plan', name: 'update_plan',
       arguments: JSON.stringify({ plan: [{ step: 'Check synthetic work', status: 'in_progress' }] }),
@@ -246,11 +250,16 @@ test('a replayed old start after cold recovery cannot replace a genuinely new tu
     record(BASE + 63_300, 'response_item', {
       type: 'function_call_output', call_id: 'current-plan', output: 'Plan updated',
     }),
+    event(BASE + 63_350, 'item_completed', {
+      turn_id: 'turn-two',
+      item: { type: 'FileChange', id: 'edit-two', status: 'completed', changes: { 'current.js': { type: 'update' } } },
+    }),
   ]);
   assert.equal((await f.watcher.scan(BASE + 63_500)).length, 1);
   assert.equal(internal.codexDetails.turn.id, 'turn-two');
   assert.equal(internal.codexDetails.effort, 'high');
   assert.equal(internal.codexDetails.plan.callId, 'current-plan');
+  assert.deepEqual(internal.codexDetails.fileChanges, [{ path: 'current.js', kind: 'update' }]);
   const currentDetails = structuredClone(internal.codexDetails);
   await f.append(CHILD, [start(BASE + 64_000)]);
   assert.equal((await f.watcher.scan(BASE + 64_000)).length, 1);
@@ -259,12 +268,16 @@ test('a replayed old start after cold recovery cannot replace a genuinely new tu
   await f.append(CHILD, [complete(BASE + 65_000, 'turn-two')]);
   assert.equal((await f.watcher.scan(BASE + 125_000)).length, 0);
   assert.equal(internal.completedAt, BASE + 65_000);
+  assert.equal(internal.codexDetails.turn.id, 'turn-two');
   assert.equal(internal.codexDetails.turn.status, 'completed');
+  assert.equal(internal.codexDetails.effort, 'high');
+  assert.equal(internal.codexDetails.plan.callId, 'current-plan');
+  assert.deepEqual(internal.codexDetails.fileChanges, [{ path: 'current.js', kind: 'update' }]);
 });
 
 for (const termination of ['task_complete', 'turn_aborted']) {
   for (const location of ['live append', 'cold tail']) {
-    test('a stale ' + termination + ' cannot create execution details for a recovered current turn (' + location + ')', async (t) => {
+    test('a stale ' + termination + ' cannot change execution details for a recovered current turn (' + location + ')', async (t) => {
       const stale = event(BASE + 21 * MINUTE, termination, { turn_id: 'turn-one' });
       const f = await fixture(t, [[CHILD, [
         meta(CHILD, BASE, PARENT),
@@ -277,7 +290,9 @@ for (const termination of ['task_complete', 'turn_aborted']) {
       assert.equal((await f.watcher.scan(BASE + 22 * MINUTE)).length, 1);
       const internal = f.watcher.sessions.get(f.paths.get(CHILD));
       assert.equal(internal.codexTurnId, 'turn-two');
-      assert.equal(internal.codexDetails.turn, null);
+      assert.deepEqual(internal.codexDetails.turn, {
+        id: 'turn-two', status: 'unknown', startedAt: null, completedAt: null, durationMs: null,
+      });
       const currentDetails = structuredClone(internal.codexDetails);
       if (location === 'live append') {
         await f.append(CHILD, [stale]);
@@ -395,6 +410,8 @@ for (const mode of ['live', 'cold-small', 'cold-partial']) {
     let internal = f.watcher.sessions.get(f.paths.get(CHILD));
     assert.equal(internal.completedAt, null);
     assert.equal(internal.codexTurnId, 'turn-two');
+    assert.equal(internal.codexDetails.turn.id, 'turn-two');
+    assert.equal(internal.codexDetails.turn.status, 'unknown');
 
     await f.append(CHILD, [
       record(BASE + 122_100, 'turn_context', { turn_id: 'turn-one' }),
@@ -405,6 +422,8 @@ for (const mode of ['live', 'cold-small', 'cold-partial']) {
     internal = f.watcher.sessions.get(f.paths.get(CHILD));
     assert.equal(internal.completedAt, null);
     assert.equal(internal.codexTurnId, 'turn-two');
+    assert.equal(internal.codexDetails.turn.id, 'turn-two');
+    assert.equal(internal.codexDetails.turn.status, 'unknown');
 
     await f.append(CHILD, [
       complete(BASE + 123_000, 'turn-two'),
@@ -446,4 +465,126 @@ test('cold recovery keeps an ID-less started child when context later supplies i
   await f.append(CHILD, [complete(BASE + 21 * MINUTE)]);
   assert.deepEqual((await f.watcher.scan(BASE + 21 * MINUTE)).map(({ id }) => id), [CHILD]);
   assert.equal(f.watcher.getSessions(BASE + 22 * MINUTE).length, 0);
+});
+
+test('an old ID-less start cannot reopen completed execution details', async (t) => {
+  const f = await fixture(t, [[CHILD, [
+    meta(CHILD, BASE, PARENT), event(BASE, 'task_started'), event(BASE + 1_000, 'task_complete'),
+  ]]]);
+  const [completed] = await f.watcher.scan(BASE + 2_000);
+  assert.equal(completed.codexDetails.turn.status, 'completed');
+  await f.append(CHILD, [event(BASE + 500, 'task_started')]);
+  const [replayed] = await f.watcher.scan(BASE + 3_000);
+  assert.deepEqual(replayed.codexDetails.turn, completed.codexDetails.turn);
+  assert.equal(f.watcher.getSessions(BASE + 61_000).length, 0);
+});
+
+test('cold tail replays preserve current details when old turn IDs were recovered', async (t) => {
+  const f = await fixture(t, [[CHILD, [
+    meta(CHILD, BASE, PARENT), start(BASE), complete(BASE + 1_000),
+    record(BASE + 2_000, 'unknown', { padding: 'x'.repeat(400_000) }),
+    start(BASE + 3_000, 'turn-two'),
+    record(BASE + 3_100, 'turn_context', { turn_id: 'turn-two', model: 'current-model', effort: 'high' }),
+    event(BASE + 3_200, 'item_completed', {
+      turn_id: 'turn-two',
+      item: { type: 'FileChange', id: 'edit-two', status: 'completed', changes: { 'current.js': { type: 'update' } } },
+    }),
+    start(BASE + 4_000),
+    record(BASE + 4_100, 'turn_context', { turn_id: 'turn-one', model: 'old-model', effort: 'low' }),
+    complete(BASE + 5_000, 'turn-two'),
+  ]]]);
+  const [result] = await f.watcher.scan(BASE + 6_000);
+  assert.equal(result.codexDetails.turn.id, 'turn-two');
+  assert.equal(result.codexDetails.turn.status, 'completed');
+  assert.equal(result.model, 'current-model');
+  assert.equal(result.codexDetails.effort, 'high');
+  assert.deepEqual(result.codexDetails.fileChanges, [{ path: 'current.js', kind: 'update' }]);
+  assert.equal(f.watcher.getSessions(BASE + 65_000).length, 0);
+});
+
+for (const location of ['tail', 'recovered']) {
+  test('cold recovery rejects replayed context-only turns (' + location + ')', async (t) => {
+    const f = await fixture(t, [[CHILD, [
+      meta(CHILD, BASE, PARENT),
+      record(BASE, 'unknown', { padding: 'x'.repeat(150_000) }),
+      start(BASE, 'turn-started'),
+      record(BASE + 100, 'turn_context', { turn_id: 'turn-one', model: 'old-model' }),
+      record(BASE + 200, 'turn_context', { turn_id: 'turn-two', model: 'current-model', effort: 'high' }),
+      record(BASE + 300, 'unknown', { padding: 'x'.repeat(400_000) }),
+      record(BASE + 400, 'turn_context', { turn_id: 'turn-one', model: 'old-model' }),
+      ...(location === 'recovered' ? [record(BASE + 500, 'unknown', { padding: 'x'.repeat(400_000) })] : []),
+      complete(BASE + 1_000, 'turn-two'),
+    ]]]);
+    const [result] = await f.watcher.scan(BASE + 2_000);
+    assert.equal(result.codexDetails.turn.id, 'turn-two');
+    assert.equal(result.codexDetails.turn.status, 'completed');
+    assert.equal(result.codexDetails.turn.startedAt, null);
+    assert.equal(result.codexDetails.effort, null);
+    assert.equal(f.watcher.getSessions(BASE + 61_000).length, 0);
+  });
+}
+
+test('a recovered older context cannot hide results after a duplicate current start', async (t) => {
+  const f = await fixture(t, [[CHILD, [
+    meta(CHILD, BASE, PARENT),
+    record(BASE, 'turn_context', { turn_id: 'turn-one', model: 'old-model', effort: 'high' }),
+    start(BASE), complete(BASE + 1_000), start(BASE + 2_000, 'turn-two'),
+    record(BASE + 3_000, 'unknown', { padding: 'x'.repeat(400_000) }),
+    start(BASE + 4_000, 'turn-two'),
+    event(BASE + 4_100, 'item_completed', {
+      turn_id: 'turn-two',
+      item: { type: 'FileChange', id: 'edit-two', status: 'completed', changes: { 'new.js': { type: 'add' } } },
+    }),
+    complete(BASE + 5_000, 'turn-two'),
+  ]]]);
+  const [result] = await f.watcher.scan(BASE + 6_000);
+  assert.equal(result.codexDetails.turn.id, 'turn-two');
+  assert.equal(result.codexDetails.turn.status, 'completed');
+  assert.equal(result.codexDetails.turn.startedAt, null);
+  assert.equal(result.codexDetails.effort, null);
+  assert.deepEqual(result.codexDetails.fileChanges, [{ path: 'new.js', kind: 'add' }]);
+  assert.equal(f.watcher.getSessions(BASE + 65_000).length, 0);
+});
+
+test('a duplicate recovered current start preserves observed usage and workflow', async (t) => {
+  const usage = (time, output) => event(time, 'token_count', {
+    info: { total_token_usage: { output_tokens: output, input_tokens: output * 10, total_tokens: output * 11 } },
+  });
+  const f = await fixture(t, [[CHILD, [
+    meta(CHILD, BASE, PARENT), start(BASE), usage(BASE + 100, 100), complete(BASE + 200),
+    record(BASE + 300, 'unknown', { padding: 'x'.repeat(150_000) }),
+    start(BASE + 1_000, 'turn-two'),
+    record(BASE + 2_000, 'unknown', { padding: 'x'.repeat(300_000) }),
+    event(BASE + 3_000, 'task_started', { turn_id: 'turn-two', model_context_window: 200_000 }),
+    usage(BASE + 3_100, 10),
+    record(BASE + 3_200, 'response_item', { type: 'function_call', name: 'update_plan', call_id: 'plan-two',
+      arguments: JSON.stringify({ plan: [{ step: 'Check current turn', status: 'in_progress' }] }) }),
+    record(BASE + 3_300, 'response_item', { type: 'function_call_output', call_id: 'plan-two', output: 'Plan updated' }),
+  ]]]);
+  const [result] = await f.watcher.scan(BASE + 4_000);
+  assert.equal(result.outputTokensTotal, 110);
+  assert.equal(result.contextWindowTokens, 200_000);
+  assert.equal(result.codexDetails.turn.id, 'turn-two');
+  assert.equal(result.codexDetails.turn.status, 'unknown');
+  assert.equal(result.codexDetails.turn.startedAt, null);
+  assert.deepEqual(result.codexDetails.plan.steps, [{ step: 'Check current turn', status: 'in_progress' }]);
+  await f.append(CHILD, [start(BASE + 4_100, 'turn-two'), usage(BASE + 4_200, 10), usage(BASE + 4_300, 15)]);
+  const [updated] = await f.watcher.scan(BASE + 5_000);
+  assert.equal(updated.outputTokensTotal, 115);
+  assert.deepEqual(updated.codexDetails.plan, result.codexDetails.plan);
+});
+
+test('a late start for a context-only historical turn cannot replace current details', async (t) => {
+  const f = await fixture(t, [[CHILD, [
+    meta(CHILD, BASE, PARENT),
+    record(BASE, 'turn_context', { turn_id: 'turn-one' }),
+    record(BASE + 100, 'turn_context', { turn_id: 'turn-two' }),
+    record(BASE + 200, 'unknown', { padding: 'x'.repeat(400_000) }),
+    start(BASE + 300, 'turn-one'), complete(BASE + 1_000, 'turn-two'),
+  ]]]);
+  const [result] = await f.watcher.scan(BASE + 2_000);
+  assert.equal(result.codexDetails.turn.id, 'turn-two');
+  assert.equal(result.codexDetails.turn.status, 'completed');
+  assert.equal(f.watcher.sessions.get(f.paths.get(CHILD)).codexTurnId, 'turn-two');
+  assert.equal(f.watcher.getSessions(BASE + 61_000).length, 0);
 });

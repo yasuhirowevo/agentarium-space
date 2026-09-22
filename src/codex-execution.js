@@ -175,6 +175,15 @@ function applyFiles(session, record, item, turnId, state) {
   }
 }
 
+// Recover replay identities without publishing execution details from skipped history.
+export function seedCodexTurnHistory(session, turnIds, currentTurnId) {
+  const state = stateFor(session);
+  for (const id of turnIds) remember(state.turns, id, MAX_TURNS);
+  if (identity(currentTurnId)) {
+    newTurn(session, { id: currentTurnId, status: 'unknown', startedAt: null, completedAt: null, durationMs: null });
+  }
+}
+
 // Only the observed tail is applied here. Historical head metadata never replays work.
 export function applyCodexExecution(session, record) {
   if (!record || typeof record !== 'object') return;
