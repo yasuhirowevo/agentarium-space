@@ -146,10 +146,8 @@ button:focus-visible {
 }
 
 .header-title {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
+  display: grid;
+  gap: 5px;
 }
 
 .app-version {
