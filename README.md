@@ -12,9 +12,9 @@ smaller lights orbiting their parent and dissolve into particles when their work
 
 ## Demo
 
-[![Agentarium Space showing two fictional projects and their sessions](docs/media/agentarium-space-demo.png)](https://github.com/user-attachments/assets/a169b21c-dd2a-4394-bf39-6629e870cc62)
+[![Agentarium Space showing two fictional projects and their sessions](docs/media/agentarium-space-demo.png)](https://github.com/user-attachments/assets/d8f7ca2f-49f0-4e0d-a3d3-e43cd53eca5c)
 
-[Watch the 24-second demo](https://github.com/user-attachments/assets/a169b21c-dd2a-4394-bf39-6629e870cc62) · No audio
+[Watch the 24-second demo](https://github.com/user-attachments/assets/d8f7ca2f-49f0-4e0d-a3d3-e43cd53eca5c) · No audio
 
 Recorded in the app using fictional sessions, prompts, and project paths.
 See [how to record the demo](docs/demo.md).
