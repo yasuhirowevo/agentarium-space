@@ -352,6 +352,34 @@ UI が観測したツール名から `tool` の表現を描き分ける。v2 の
 - README には架空データのデモであることを明記する。公開前に描画、動画の全期間、メタデータ、
   入力ログから配信 snapshot までの文字列を確認する。生成動画と一時ファイルは `dist/demo/` に置く。
 
+## UI の英語表記（v2.26）
+
+- アプリが用意する表示文言を英語に統一する。対象は HUD・FOCUS・AGENT TREE・Canvas・
+  LIVE STREAM の状態名、操作、空表示、欠損値、時間単位、読み上げ用ラベル、および UI 読み込み失敗時の案内。
+  HTML の文書言語は `en`、日時は `en-US` 形式とし、利用者のローカルタイムゾーンを維持する。
+- 状態判定と内部の状態値は維持し、表示名を次のとおり揃える。
+
+  | 対象 | 内部値 | 表示名 |
+  |---|---|---|
+  | セッション | thinking | Thinking |
+  | セッション | tool | Tool use |
+  | セッション | waiting | Waiting |
+  | セッション | idle | Idle |
+  | Claude sub-agent | running | Active |
+  | Claude sub-agent | done | Done |
+
+- 子エージェントの呼称は `Subagent` / `Subagents`、呼び出し回数は `Tool calls` とする。
+  v2.1 の「考え中」「ひと休み」と v2.9 の「← 全体」は、本節の `Thinking` / `Waiting` / `← Overview` に置き換える。
+  ツール名がある Canvas の実況は既存どおり具体的な名前・対象を優先する。
+- タスク名・発話・計画・ツール対象・パスなど、ログ由来の内容は原文で表示する。
+  状態判定、配置、表示時間、アニメーション、データ形式は変更しない。
+  名称欠損時も、英語の表示名と配置・グループ化に使う従来の内部キーを分け、配置を維持する。
+
+用語の参照: [OpenAI の tool calling](https://developers.openai.com/api/docs/guides/function-calling)、
+[Anthropic の tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works)、
+[Subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents)。
+操作・空表示などの案内文は、この UI に合わせた英語表記とする。
+
 ## 原則
 
 - **読み取り専用**: ログファイルへの書き込み・改変・削除は一切しない

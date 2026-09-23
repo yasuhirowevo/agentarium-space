@@ -10,7 +10,7 @@ import { createCodexWatcher } from './watchers/codex.js';
 const HOST = '127.0.0.1';
 const DEFAULT_PORT = 41414;
 const ACCESS_TOKEN_BYTES = 32;
-const FALLBACK_TEXT = 'UI ファイルが見つかりません';
+const FALLBACK_TEXT = 'UI files not found';
 const PRIVATE_RESPONSE_HEADERS = {
   'Cache-Control': 'no-store',
   'Referrer-Policy': 'no-referrer',

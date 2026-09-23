@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ja">
+<html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -17,15 +17,15 @@
           </div>
           <time class="hud-clock" id="hud-clock" datetime="">--:--:--</time>
         </div>
-        <div class="header-status" aria-label="稼働状況">
+        <div class="header-status" aria-label="Session status">
           <div class="state-counts">
-            <p class="hud-count"><span class="state-dot status-tool"></span><span>Tool</span><strong id="status-count-tool">0</strong></p>
+            <p class="hud-count"><span class="state-dot status-tool"></span><span>Tool use</span><strong id="status-count-tool">0</strong></p>
             <p class="hud-count"><span class="state-dot status-thinking"></span><span>Thinking</span><strong id="status-count-thinking">0</strong></p>
             <p class="hud-count"><span class="state-dot status-waiting"></span><span>Waiting</span><strong id="status-count-waiting">0</strong></p>
             <p class="hud-count"><span class="state-dot status-idle"></span><span>Idle</span><strong id="status-count-idle">0</strong></p>
           </div>
           <p class="hud-sync" id="hud-sync"><span>Sync</span><strong id="sync-elapsed">—</strong></p>
-          <div class="hud-sparkline" aria-label="直近15分のイベント毎分推移">
+          <div class="hud-sparkline" aria-label="Events per minute over the last 15 minutes">
             <span>Events/min</span>
             <canvas id="event-sparkline" width="80" height="24" aria-hidden="true"></canvas>
           </div>
@@ -38,7 +38,7 @@
       </header>
 
       <div class="workspace">
-        <aside class="detail-panel" id="detail-panel" aria-label="フォーカスとエージェントツリー">
+        <aside class="detail-panel" id="detail-panel" aria-label="Focus and agent tree">
           <div class="module-stack">
             <section class="console-module focus-module" aria-labelledby="focus-module-title">
               <span class="module-corner corner-nw" aria-hidden="true"></span>
@@ -48,7 +48,7 @@
               <header class="module-header">
                 <div class="module-header-title">
                   <h2 id="focus-module-title">Focus</h2>
-                  <button class="focus-back" id="focus-back" type="button" aria-label="全体ビューへ戻る" hidden>← 全体</button>
+                  <button class="focus-back" id="focus-back" type="button" aria-label="Back to overview" hidden>← Overview</button>
                 </div>
                 <p class="eyebrow" id="panel-eyebrow">Operation overview</p>
               </header>
@@ -60,25 +60,25 @@
                   <dl class="overview-stats">
                     <div><dt>Sectors</dt><dd id="overview-sector-count">0</dd></div>
                     <div><dt>Sessions</dt><dd id="overview-session-count">0</dd></div>
-                    <div><dt>Sub-agents</dt><dd id="overview-subagent-count">0</dd></div>
+                    <div><dt>Subagents</dt><dd id="overview-subagent-count">0</dd></div>
                     <div><dt>Events / 15m</dt><dd id="overview-event-count">0</dd></div>
                   </dl>
-                  <div class="status-breakdown" aria-label="セッション状態別内訳">
+                  <div class="status-breakdown" aria-label="Sessions by status">
                     <div class="status-breakdown-row">
-                      <span>Tool</span><strong id="overview-status-count-tool">0</strong>
-                      <span class="status-track" id="overview-status-bar-tool" role="progressbar" aria-label="Tool セッション比率" aria-valuemin="0"><span class="status-fill status-tool"></span></span>
+                      <span>Tool use</span><strong id="overview-status-count-tool">0</strong>
+                      <span class="status-track" id="overview-status-bar-tool" role="progressbar" aria-label="Share of sessions using tools" aria-valuemin="0"><span class="status-fill status-tool"></span></span>
                     </div>
                     <div class="status-breakdown-row">
                       <span>Thinking</span><strong id="overview-status-count-thinking">0</strong>
-                      <span class="status-track" id="overview-status-bar-thinking" role="progressbar" aria-label="Thinking セッション比率" aria-valuemin="0"><span class="status-fill status-thinking"></span></span>
+                      <span class="status-track" id="overview-status-bar-thinking" role="progressbar" aria-label="Share of thinking sessions" aria-valuemin="0"><span class="status-fill status-thinking"></span></span>
                     </div>
                     <div class="status-breakdown-row">
                       <span>Waiting</span><strong id="overview-status-count-waiting">0</strong>
-                      <span class="status-track" id="overview-status-bar-waiting" role="progressbar" aria-label="Waiting セッション比率" aria-valuemin="0"><span class="status-fill status-waiting"></span></span>
+                      <span class="status-track" id="overview-status-bar-waiting" role="progressbar" aria-label="Share of waiting sessions" aria-valuemin="0"><span class="status-fill status-waiting"></span></span>
                     </div>
                     <div class="status-breakdown-row">
                       <span>Idle</span><strong id="overview-status-count-idle">0</strong>
-                      <span class="status-track" id="overview-status-bar-idle" role="progressbar" aria-label="Idle セッション比率" aria-valuemin="0"><span class="status-fill status-idle"></span></span>
+                      <span class="status-track" id="overview-status-bar-idle" role="progressbar" aria-label="Share of idle sessions" aria-valuemin="0"><span class="status-fill status-idle"></span></span>
                     </div>
                   </div>
                   <section class="fleet-section" aria-labelledby="fleet-section-title">
@@ -205,7 +205,7 @@
 
                   <section class="panel-section timeline-section">
                     <h3>Status timeline</h3>
-                    <div class="status-timeline" id="detail-timeline" role="img" aria-label="直近30分の状態履歴"></div>
+                    <div class="status-timeline" id="detail-timeline" role="img" aria-label="Status history over the last 30 minutes"></div>
                   </section>
                 </div>
               </div>
@@ -234,11 +234,11 @@
         <section class="canvas-region" id="canvas-region" aria-label="Agentarium Space canvas">
           <canvas id="bay-canvas" class="bay-canvas" aria-hidden="true"></canvas>
           <main>
-            <ul class="visually-hidden" id="session-list" aria-label="稼働セッション"></ul>
+            <ul class="visually-hidden" id="session-list" aria-label="Sessions"></ul>
           </main>
         </section>
 
-        <aside class="stream-panel" aria-label="ライブストリーム">
+        <aside class="stream-panel" aria-label="Live stream">
           <section class="console-module live-stream-module" aria-labelledby="live-stream-module-title">
             <span class="module-corner corner-nw" aria-hidden="true"></span>
             <span class="module-corner corner-ne" aria-hidden="true"></span>

@@ -47,7 +47,7 @@ export function turnReadout(turn, now = Date.now()) {
 }
 
 function dateLabel(value) {
-  return timestamp(value) === null ? UNKNOWN : new Date(value).toLocaleString();
+  return timestamp(value) === null ? UNKNOWN : new Date(value).toLocaleString('en-US');
 }
 
 function windowLabel(minutes) {

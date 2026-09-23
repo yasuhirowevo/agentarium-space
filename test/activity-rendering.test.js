@@ -240,3 +240,26 @@ test('reduced motion clears transient effects and suppresses motes and flowing r
   assert.equal(ctx.arcs.length, 0);
   assert.equal(ctx.strokes.length, 1, 'reduced motion retains the static relationship');
 });
+
+test('English missing-project labels preserve grouping and sector placement', () => {
+  const missing = session({ key: 'codex:missing', id: 'missing', projectName: '', cwd: '/synthetic/missing' });
+  const named = session({ key: 'codex:named', id: 'named', projectName: 'Zeta', cwd: '/synthetic/named' });
+  const legacy = scene([{ ...missing, projectName: '名称未取得のプロジェクト' }, named]);
+  const current = scene([missing, named]);
+  const legacyKey = legacy.store.entities.get(missing.key).poolKey;
+  const currentKey = current.store.entities.get(missing.key).poolKey;
+  assert.equal(currentKey, legacyKey, 'translating the fallback must not change grouping identity');
+  assert.equal(current.sim.pools.get(currentKey).name, 'Unknown project');
+  for (const raw of [missing, named]) {
+    const key = legacy.store.entities.get(raw.key).poolKey;
+    const before = legacy.sim.pools.get(key);
+    const after = current.sim.pools.get(key);
+    assert.equal(after.targetX, before.targetX);
+    assert.equal(after.targetY, before.targetY);
+  }
+
+  const literalName = { ...missing, key: 'codex:literal', id: 'literal', projectName: 'Unknown project' };
+  current.snapshot([missing, named, literalName]);
+  assert.equal(current.sim.pools.size, 3, 'a logged name must not merge with the display fallback');
+  assert.notEqual(current.store.entities.get(missing.key).poolKey, current.store.entities.get(literalName.key).poolKey);
+});
