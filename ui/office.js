@@ -9,10 +9,10 @@ import {
 } from './callout-policy.js';
 
 const STATUS_LABELS = {
-  thinking: '考え中',
-  tool: 'ツール実行中',
-  waiting: '待機中',
-  idle: 'アイドル',
+  thinking: 'Thinking',
+  tool: 'Tool use',
+  waiting: 'Waiting',
+  idle: 'Idle',
 };
 
 const SOURCE_LABELS = {
@@ -260,14 +260,16 @@ function isLongRunning(session, now = Date.now()) {
 }
 
 function projectKey(session) {
-  return `${session.projectName || '名称未取得'}\u0000${session.cwd || 'unknown'}`;
+  return `${session.projectNameForKey || session.projectName || '名称未取得'}\u0000${session.cwd || 'unknown'}`;
 }
 
 function normalizedSession(session) {
   return {
     ...session,
-    projectName: session.projectName || '名称未取得のプロジェクト',
-    title: session.title || '名称未取得のセッション',
+    // Keep grouping and layout stable when translating the missing-name label.
+    projectNameForKey: session.projectName || '名称未取得のプロジェクト',
+    projectName: session.projectName || 'Unknown project',
+    title: session.title || 'Unknown session',
     status: STATUS_LABELS[session.status] ? session.status : 'idle',
     source: SOURCE_LABELS[session.source] ? session.source : 'codex',
     activity: typeof session.activity === 'string' ? session.activity : null,
@@ -1895,16 +1897,16 @@ class Renderer {
     const longRun = isLongRunning(entity.session);
     let statusText = '';
     if (entity.session.status === 'tool') {
-      statusText = entity.session.activity || 'ツール実行中';
+      statusText = entity.session.activity || 'Tool use';
       if (entity.session.activityDetail) statusText += `: ${entity.session.activityDetail}`;
       const elapsed = Date.now() - entity.session.lastActivity;
       if (elapsed >= 30_000) {
-        statusText += elapsed < 60_000 ? '・30秒+' : `・${Math.floor(elapsed / 60_000)}分`;
+        statusText += elapsed < 60_000 ? ' · 30s+' : ` · ${Math.floor(elapsed / 60_000)}m`;
       }
-      if (longRun) statusText += '・LONG RUN';
+      if (longRun) statusText += ' · LONG RUN';
     }
-    else if (entity.session.status === 'thinking') statusText = '考え中';
-    else if (entity.session.status === 'waiting') statusText = 'ひと休み';
+    else if (entity.session.status === 'thinking') statusText = 'Thinking';
+    else if (entity.session.status === 'waiting') statusText = 'Waiting';
     const metricText = [contextLabel(entity.session), outputTokensLabel(entity.session)]
       .filter(Boolean)
       .join(' · ');
@@ -2423,7 +2425,7 @@ class A11y {
       const source = SOURCE_LABELS[session.source] || session.source;
       const status = STATUS_LABELS[session.status] || session.status;
       button.type = 'button';
-      button.textContent = `${session.title}、${session.projectName}、${source}、${status}`;
+      button.textContent = `${session.title}, ${session.projectName}, ${source}, ${status}`;
       button.addEventListener('click', () => this.onSelect(session.key));
       item.append(button);
       fragment.append(item);
@@ -2615,7 +2617,7 @@ class DetailPanel {
       fragment.append(project);
     }
     overviewAgents.replaceChildren(fragment);
-    if (!overviewAgents.children.length) this.appendItem(overviewAgents, 'セッションはまだありません');
+    if (!overviewAgents.children.length) this.appendItem(overviewAgents, 'No sessions yet');
     this.renderGlobalEvents(now);
   }
 
@@ -2698,8 +2700,8 @@ class DetailPanel {
       const subAgentItem = document.createElement('li');
       subAgentItem.className = 'overview-session-node';
       subAgentItem.append(this.createOverviewRow(
-        subAgent.label || 'サブエージェント',
-        done ? '完了' : '稼働中',
+        subAgent.label || 'Subagent',
+        done ? 'Done' : 'Active',
         done ? 'idle' : 'tool',
       ));
       children.append(subAgentItem);
@@ -2828,7 +2830,7 @@ class DetailPanel {
       fragment.append(this.createEventItem(entry, now));
     }
     overviewEvents.replaceChildren(fragment);
-    if (!overviewEvents.children.length) this.appendItem(overviewEvents, '最近のイベントはありません');
+    if (!overviewEvents.children.length) this.appendItem(overviewEvents, 'No recent events');
   }
 
   render() {
@@ -2837,7 +2839,7 @@ class DetailPanel {
     detailTitle.textContent = session.title;
     detailSource.textContent = SOURCE_LABELS[session.source] || session.source;
     detailSource.className = `source-value source-${session.source}`;
-    detailCwd.textContent = session.cwd || '未取得';
+    detailCwd.textContent = session.cwd || 'Unknown';
     detailBranch.textContent = session.gitBranch || '—';
     detailModel.textContent = session.model || '—';
     detailAccess.textContent = session.writeAccess ? session.writeAccess.toUpperCase() : '—';
@@ -2978,7 +2980,7 @@ class DetailPanel {
     const labels = this.renderStatusSegments(detailTimeline, session.key, now);
     detailTimeline.setAttribute(
       'aria-label',
-      labels.length ? `直近30分の状態履歴: ${labels.join('、')}` : '状態履歴はまだありません',
+      labels.length ? `Status history over the last 30 minutes: ${labels.join(', ')}` : 'No status history yet',
     );
   }
 
@@ -3014,7 +3016,7 @@ class DetailPanel {
     const labels = this.renderStatusSegments(element, sessionKey, now);
     element.setAttribute(
       'aria-label',
-      labels.length ? `状態履歴: ${labels.join('、')}` : '状態履歴はまだありません',
+      labels.length ? `Status history: ${labels.join(', ')}` : 'No status history yet',
     );
   }
 
@@ -3057,8 +3059,8 @@ class DetailPanel {
     for (const subAgent of session.subAgents.slice().sort((left, right) => compareText(left.id, right.id))) {
       const done = subAgent.status === 'done';
       childList.append(this.createAgentNode(
-        subAgent.label || 'サブエージェント',
-        done ? '完了' : '稼働中',
+        subAgent.label || 'Subagent',
+        done ? 'Done' : 'Active',
         done ? 'idle' : 'tool',
       ));
     }
@@ -3121,7 +3123,7 @@ class DetailPanel {
     for (const entry of this.collapseEventEntries(entries)) {
       detailEvents.append(this.createEventItem(entry));
     }
-    if (!detailEvents.children.length) this.appendItem(detailEvents, '最近のイベントはありません');
+    if (!detailEvents.children.length) this.appendItem(detailEvents, 'No recent events');
   }
 
   setTypeInText(element, value, enabled) {
