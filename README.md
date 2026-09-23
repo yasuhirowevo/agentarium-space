@@ -10,6 +10,13 @@ send ripples across the surface, thinking sessions breathe with a soft halo, and
 inactive sessions close their eyes and sink toward the edge. Sub-agents appear as
 smaller lights orbiting their parent and dissolve into particles when their work is done.
 
+## Demo
+
+![Agentarium Space showing two fictional projects and their sessions](docs/media/agentarium-space-demo.png)
+
+Recorded in the app using fictional sessions, prompts, and project paths.
+See [how to record the demo](docs/demo.md).
+
 ## Install on Windows
 
 Prebuilt releases support Windows 10 or later on x64 PCs. Download
