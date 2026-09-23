@@ -173,6 +173,7 @@ export async function startServer({
   claudeRoot,
   codexRoot,
 } = {}) {
+  const { version: appVersion } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
   let debounceTimer = null;
   let heartbeatTimer = null;
   let closed = false;
@@ -204,7 +205,7 @@ export async function startServer({
 
   function snapshot() {
     const at = Date.now();
-    return { type: 'snapshot', at, sessions: sessions(at) };
+    return { type: 'snapshot', appVersion, at, sessions: sessions(at) };
   }
 
   function broadcast() {

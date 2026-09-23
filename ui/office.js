@@ -70,6 +70,7 @@ const GLOBAL_EVENT_LIMIT = 20;
 const canvas = document.querySelector('#bay-canvas');
 const canvasRegion = document.querySelector('#canvas-region');
 const hudClock = document.querySelector('#hud-clock');
+const appVersion = document.querySelector('#app-version');
 const syncElapsed = document.querySelector('#sync-elapsed');
 const hudSync = document.querySelector('#hud-sync');
 const hudTotalOutput = document.querySelector('#hud-total-output');
@@ -352,7 +353,7 @@ class WSClient {
       try {
         const message = JSON.parse(event.data);
         if (message.type === 'snapshot' && Array.isArray(message.sessions)) {
-          this.onSnapshot(message.sessions);
+          this.onSnapshot(message.sessions, message.appVersion);
         }
       } catch {
         // Ignore malformed or future protocol messages without breaking the live view.
@@ -3179,7 +3180,7 @@ class App {
     this.interaction = new Interaction(canvas, this.store, this.renderer, (key) => this.panel.toggle(key));
     this.a11y = new A11y(sessionList, (key) => this.panel.toggle(key));
     this.wsClient = new WSClient({
-      onSnapshot: (sessions) => this.onSnapshot(sessions),
+      onSnapshot: (sessions, version) => this.onSnapshot(sessions, version),
       onConnection: (connected) => this.setConnection(connected),
     });
     this.animationFrame = null;
@@ -3208,7 +3209,8 @@ class App {
     this.sim.resize(this.renderer.width, this.renderer.height);
   }
 
-  onSnapshot(rawSessions) {
+  onSnapshot(rawSessions, version) {
+    appVersion.textContent = typeof version === 'string' && version ? `v${version}` : '';
     const previousSessions = this.store.sessionsByKey;
     const seedEvents = !this.store.hasSnapshot;
     const sessions = this.store.applySnapshot(rawSessions);

@@ -329,6 +329,17 @@ UI が観測したツール名から `tool` の表現を描き分ける。v2 の
   `pnpm test` → `pnpm run scan` → `pnpm run web` の起動 URL で実ログの描画を確認し、
   合成シーンで各作業・複数の子・密集時を見比べる。公開用の証跡に実ログや個人情報を含めない。
 
+## アプリのバージョン表示（v2.24）
+
+- ヘッダ左上のアプリ名の直下に、`v<version>` を小さな淡色の文字で常時表示する。
+  アプリ名と左端をそろえ、時計の数字とは行を分ける。
+  既存の時計・稼働情報・Canvas の構成とアニメーションは維持する。
+- 正典は `package.json` の version とし、今回は `0.3.0` に更新する。
+  サーバーが起動時に読み、既存の認証付き WebSocket snapshot の `appVersion` で渡す。
+  Electron 版とブラウザ版で共通とし、画面側にバージョン値を複製しない。
+- UI は `textContent` で表示する。最初の snapshot 前やバージョン情報がない場合は表示を空にし、
+  再接続時は受信値に追従する。追加の通信先・操作・装飾アニメーションは設けない。
+
 ## 原則
 
 - **読み取り専用**: ログファイルへの書き込み・改変・削除は一切しない
@@ -479,7 +490,7 @@ session = {
 - **WS は接続時に token path と Origin ヘッダを検証**: token は v2.14 の起動時生成値との完全一致、
   Origin は `http://127.0.0.1:<port>` / `http://localhost:<port>` のみ許可する。Origin ヘッダ無しは
   正しい token path がある場合だけ許可。それ以外は拒否する
-  - `{type:'snapshot', at: <epoch ms>, sessions: [session...]}`（セッション数は高々数十なので全量で十分）
+  - `{type:'snapshot', appVersion: <package version>, at: <epoch ms>, sessions: [session...]}`（セッション数は高々数十なので全量で十分）
 
 ## UI（v2 コードネーム: Lumen Bay / ui/）— 全面刷新
 
