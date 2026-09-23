@@ -10,6 +10,15 @@
 放置されると目を閉じて縁に沈みます。sub-agent は親の周りを回る小さな光として現れ、
 仕事を終えると粒子になって散ります。
 
+## デモ
+
+[![架空の2つのプロジェクトとセッションを表示したAgentarium Space](docs/media/agentarium-space-demo.png)](https://github.com/user-attachments/assets/a169b21c-dd2a-4394-bf39-6629e870cc62)
+
+[24秒のデモ動画を見る](https://github.com/user-attachments/assets/a169b21c-dd2a-4394-bf39-6629e870cc62) · 音声なし
+
+セッション・指示・プロジェクトのパスはすべて架空のデータを使い、実際のアプリで撮影しています。
+[デモの撮影方法](docs/demo.md)も公開しています。
+
 ## Windows へのインストール
 
 ビルド済み配布版は Windows 10 以降の x64 PC に対応します。
