@@ -3,9 +3,12 @@ import { activityMotionFor } from './activity-motion.js';
 import { assignmentLabel, codexDetailReadout } from './codex-details.js';
 import {
   normalizeMessageKind,
-  shouldBootstrapSpotlight,
+  isChildSession,
+  isMainCalloutSession,
+  mainCalloutsFor,
+  persistentCalloutFor,
   SPOTLIGHT_CALLOUT_LIMIT,
-  spotlightDurationFor,
+  workCalloutFor,
 } from './callout-policy.js';
 
 const STATUS_LABELS = {
@@ -51,8 +54,8 @@ const SATELLITE_BELT_GAP = 20;
 const EVENT_POP_LIMIT = 8;
 const EVENT_POP_DURATION = 1.4;
 const CALLOUT_DIAGONAL_LENGTH = 28;
-const CALLOUT_LABEL_MAX_WIDTH = 150;
-const CALLOUT_LABEL_LINE_HEIGHT = 12;
+const CALLOUT_LABEL_MAX_WIDTH = 200;
+const CALLOUT_LABEL_LINE_HEIGHT = 16;
 const CALLOUT_MARGIN = 10;
 const CALLOUT_STAGGER = 0.1;
 const CALLOUT_SLOTS = {
@@ -60,6 +63,11 @@ const CALLOUT_SLOTS = {
   NW: -144 * Math.PI / 180,
   SE: 36 * Math.PI / 180,
   SW: 144 * Math.PI / 180,
+  NNE: -65 * Math.PI / 180,
+  NNW: -115 * Math.PI / 180,
+  ENE: -12 * Math.PI / 180,
+  WNW: -168 * Math.PI / 180,
+  N: -Math.PI / 2,
 };
 const STATUS_HISTORY_MS = 30 * 60 * 1000;
 const POOL_EVENT_WINDOW_MS = 60 * 1000;
@@ -275,6 +283,8 @@ function normalizedSession(session) {
     activity: typeof session.activity === 'string' ? session.activity : null,
     activityDetail: typeof session.activityDetail === 'string' ? session.activityDetail : null,
     lastMessage: typeof session.lastMessage === 'string' ? session.lastMessage : null,
+    lastMessageText: typeof session.lastMessageText === 'string' && session.lastMessageText
+      ? session.lastMessageText : session.lastMessage,
     lastMessageAt: Number.isFinite(session.lastMessageAt) ? session.lastMessageAt : null,
     lastMessageKind: normalizeMessageKind(session.lastMessageKind),
     contextUsedTokens: Number.isFinite(session.contextUsedTokens) && session.contextUsedTokens >= 0
@@ -390,7 +400,6 @@ class Store {
     this.sessionsByKey = new Map();
     this.eventPops = [];
     this.spotlightCallouts = new Map();
-    this.calloutSequence = 0;
     this.statusHistory = new Map();
     this.poolEventSamples = new Map();
     this.toolRuns = new Map();
@@ -421,14 +430,13 @@ class Store {
       if (isNew) {
         entity = this.createEntity(session);
         this.entities.set(session.key, entity);
-        this.emitSpotlightCallout(null, session, observedAt);
       } else {
         if (entity.session.lastActivity !== session.lastActivity) entity.pendingActivityRipple = true;
         this.emitEventPop(entity, entity.session.recentEvents, session.recentEvents);
-        this.emitSpotlightCallout(entity.session, session, observedAt);
       }
 
       entity.session = session;
+      this.syncSpotlightCallout(session);
       entity.motionKind = activityMotionFor(session);
       entity.poolKey = projectKey(session);
       entity.leaving = false;
@@ -523,36 +531,20 @@ class Store {
     this.statusHistory.set(session.key, history);
   }
 
-  emitSpotlightCallout(previousSession, nextSession, observedAt) {
-    if (!nextSession.lastMessage || nextSession.lastMessageAt === null) return;
-    if (previousSession) {
-      const previousAt = previousSession.lastMessageAt;
-      if (previousAt !== null && nextSession.lastMessageAt <= previousAt) return;
-      if (previousAt === null && previousSession.lastMessage === nextSession.lastMessage) return;
-    } else if (!shouldBootstrapSpotlight(nextSession, observedAt)) {
+  syncSpotlightCallout(session) {
+    const content = persistentCalloutFor(session);
+    const previous = this.spotlightCallouts.get(session.key);
+    if (!content) {
+      if (previous) previous.active = false;
       return;
     }
-
-    const previous = this.spotlightCallouts.get(nextSession.key);
-    this.spotlightCallouts.delete(nextSession.key);
-    this.spotlightCallouts.set(nextSession.key, {
-      entityKey: nextSession.key,
-      message: nextSession.lastMessage,
-      age: 0,
-      duration: spotlightDurationFor(nextSession.lastMessageKind),
+    this.spotlightCallouts.set(session.key, {
+      entityKey: session.key,
+      ...content,
       alpha: previous?.alpha || 0,
       reach: previous?.reach || 0,
       active: true,
-      messageAt: nextSession.lastMessageAt,
-      sequence: this.calloutSequence += 1,
     });
-    const active = [...this.spotlightCallouts.values()]
-      .filter((callout) => callout.active)
-      .sort((left, right) => left.messageAt - right.messageAt
-        || left.sequence - right.sequence);
-    while (active.length > SPOTLIGHT_CALLOUT_LIMIT) {
-      active.shift().active = false;
-    }
   }
 
   newEvents(previousEvents, nextEvents) {
@@ -678,6 +670,9 @@ class Sim {
     this.ripples = [];
     this.particles = [];
     this.expandedCallouts = new Map();
+    this.workCallouts = new Map();
+    this.mainCallouts = new Map();
+    this.nextWorkReadoutAt = 0;
     this.hoveredKey = null;
     this.selectedKey = null;
   }
@@ -706,6 +701,7 @@ class Sim {
   }
 
   syncSnapshot() {
+    this.nextWorkReadoutAt = 0;
     const groups = new Map();
     for (const session of this.store.sessionsByKey.values()) {
       const key = projectKey(session);
@@ -926,7 +922,7 @@ class Sim {
       const status = entity.session.status;
       const sourceBrightness = STATUS_BRIGHTNESS[status] || 0.3;
       entity.targetBrightness = entity.leaving ? 0 : sourceBrightness;
-      entity.targetScale = entity.isSatellite ? 0.6 : entity.leaving ? 0.72 : 1;
+      entity.targetScale = isChildSession(entity.session) ? 0.6 : entity.leaving ? 0.72 : 1;
 
       if (parent && parent !== entity && Number.isFinite(parent.x) && Number.isFinite(parent.y)) {
         const orbitTime = this.reducedMotion ? 0 : this.time * 0.24;
@@ -1157,14 +1153,53 @@ class Sim {
     this.store.eventPops = this.store.eventPops.filter((eventPop) => eventPop.age < eventPop.duration);
 
     this.updateSpotlightCallouts(deltaTime);
+    this.updateWorkCallouts(deltaTime);
     this.updateExpandedCallouts(deltaTime);
+  }
+
+  updateWorkCallouts(deltaTime) {
+    if (this.time >= this.nextWorkReadoutAt) {
+      this.nextWorkReadoutAt = this.time + 1;
+      const sessions = [...this.store.sessionsByKey.values()];
+      const now = Date.now();
+      for (const callout of this.workCallouts.values()) callout.active = false;
+      for (const callout of this.mainCallouts.values()) callout.active = false;
+      for (const entity of this.store.entities.values()) {
+        if (entity.leaving) continue;
+        for (const readout of mainCalloutsFor(entity.session, sessions, now)) {
+          const id = `${entity.key}:${readout.kind}`;
+          let callout = this.mainCallouts.get(id);
+          if (!callout) {
+            callout = { entityKey: entity.key, alpha: 0, reach: 0 };
+            this.mainCallouts.set(id, callout);
+          }
+          Object.assign(callout, readout, { active: true });
+        }
+        const summary = workCalloutFor(entity.session, sessions, now);
+        if (!summary) continue;
+        let callout = this.workCallouts.get(entity.key);
+        if (!callout) {
+          callout = { entityKey: entity.key, alpha: 0, reach: 0 };
+          this.workCallouts.set(entity.key, callout);
+        }
+        Object.assign(callout, summary, { active: true });
+      }
+    }
+    for (const callouts of [this.workCallouts, this.mainCallouts]) {
+      for (const [key, callout] of callouts) {
+        const entity = this.store.entities.get(callout.entityKey);
+        const target = callout.active && entity && !entity.leaving ? 1 : 0;
+        callout.alpha = this.reducedMotion ? target : expLerp(callout.alpha, target, deltaTime, 0.32);
+        callout.reach = this.reducedMotion ? target : expLerp(callout.reach, target, deltaTime, 0.26);
+        if (!target && callout.alpha < 0.01) callouts.delete(key);
+      }
+    }
   }
 
   updateSpotlightCallouts(deltaTime) {
     for (const [key, callout] of this.store.spotlightCallouts) {
-      callout.age += deltaTime;
       const entity = this.store.entities.get(callout.entityKey);
-      if (!entity || entity.leaving || callout.age >= callout.duration) callout.active = false;
+      if (!entity || entity.leaving) callout.active = false;
       const target = callout.active ? 1 : 0;
       callout.alpha = this.reducedMotion
         ? target
@@ -1186,11 +1221,14 @@ class Sim {
     for (const entityKey of focusedKeys) {
       const entity = this.store.entities.get(entityKey);
       if (!entity || entity.leaving) continue;
-      const spotlight = this.store.spotlightCallouts.get(entityKey);
       const rowKinds = [];
-      if (entity.session.lastMessage && !(spotlight?.alpha > 0.05)) rowKinds.push('message');
-      if (entity.session.gitBranch) rowKinds.push('branch');
-      if (entity.session.model || Number.isFinite(entity.session.startedAt)) rowKinds.push('meta');
+      const speech = persistentCalloutFor(entity.session);
+      if (isMainCalloutSession(entity.session) ? speech?.hasMessage
+        : speech || this.workCallouts.get(entityKey)?.active) rowKinds.push('message');
+      if (!isMainCalloutSession(entity.session)) {
+        if (entity.session.gitBranch) rowKinds.push('branch');
+        if (entity.session.model || Number.isFinite(entity.session.startedAt)) rowKinds.push('meta');
+      }
 
       rowKinds.forEach((kind, rowIndex) => {
         const id = `${entityKey}\u0000${kind}`;
@@ -1209,6 +1247,12 @@ class Sim {
           this.expandedCallouts.set(id, callout);
         }
         if (!callout.target) callout.delay = rowIndex * CALLOUT_STAGGER;
+        if (kind === 'message' && !callout.target) {
+          const spotlight = this.store.spotlightCallouts.get(entityKey);
+          const work = this.workCallouts.get(entityKey);
+          callout.alpha = Math.max(callout.alpha, spotlight?.alpha || 0, work?.alpha || 0);
+          callout.reach = Math.max(callout.reach, spotlight?.reach || 0, work?.reach || 0);
+        }
         callout.nextTarget = true;
         callout.order = order;
         order += 1;
@@ -1250,6 +1294,9 @@ class Renderer {
     this.shootingStar = null;
     this.shootingStarIndex = 0;
     this.nextShootingStarAt = null;
+    this.calloutPlacements = new Map();
+    this.preparedCallouts = [];
+    this.messageCalloutKeys = new Set();
   }
 
   resize() {
@@ -1288,6 +1335,7 @@ class Renderer {
     this.drawOrbitRings(ctx);
     this.drawRelationships(ctx);
     this.drawTrails(ctx);
+    this.prepareCallouts(ctx);
     this.drawOrbs(ctx);
     this.drawRipples(ctx);
     this.drawEventPops(ctx);
@@ -1761,7 +1809,7 @@ class Renderer {
   drawOrbs(ctx) {
     const entities = [...this.store.entities.values()]
       .filter((entity) => entity.opacity > 0.01)
-      .sort((left, right) => Number(left.isSatellite) - Number(right.isSatellite));
+      .sort((left, right) => Number(isChildSession(left.session)) - Number(isChildSession(right.session)));
     for (const entity of entities) this.drawOrb(ctx, entity);
 
     ctx.save();
@@ -1781,7 +1829,7 @@ class Renderer {
     ctx.restore();
 
     for (const entity of entities) {
-      if (entity.isSatellite) this.drawSatelliteNameplate(ctx, entity);
+      if (isChildSession(entity.session)) this.drawSatelliteNameplate(ctx, entity);
       else this.drawNameplate(ctx, entity);
     }
   }
@@ -2115,50 +2163,197 @@ class Renderer {
   }
 
   isMessageCalloutVisible(entityKey) {
-    if ((this.store.spotlightCallouts.get(entityKey)?.alpha || 0) > 0.05) return true;
-    return (this.sim.expandedCallouts.get(`${entityKey}\u0000message`)?.alpha || 0) > 0.05;
+    return this.messageCalloutKeys.has(entityKey);
+  }
+
+  prepareCallouts(ctx) {
+    const occupiedRects = this.calloutObstacles();
+    const occupiedLeaders = [];
+    this.preparedCallouts = [];
+    this.messageCalloutKeys.clear();
+    const seen = new Set();
+    const add = (callout, entity, content, key) => {
+      if (!content || entity.opacity < 0.05) return false;
+      seen.add(key);
+      const geometry = this.placeCallout(ctx, entity, content, occupiedRects, key, occupiedLeaders);
+      if (!geometry) return false;
+      occupiedLeaders.push(geometry);
+      this.preparedCallouts.push({ callout, entity, content, geometry });
+      if (content.hasMessage && callout.alpha > 0.05) this.messageCalloutKeys.add(entity.key);
+      return true;
+    };
+    const expanded = [...this.sim.expandedCallouts.values()]
+      .filter((callout) => callout.alpha > 0.01)
+      .filter((callout) => callout.kind !== 'message' || callout.target
+        || !((this.store.spotlightCallouts.get(callout.entityKey)?.alpha || 0) > 0.01
+          || (this.sim.workCallouts.get(callout.entityKey)?.alpha || 0) > 0.01))
+      .sort((left, right) => Number(right.target) - Number(left.target)
+        || Number(right.kind === 'message') - Number(left.kind === 'message')
+        || left.order - right.order
+        || compareText(left.id, right.id));
+    const focused = new Set(expanded.filter((callout) => callout.kind === 'message')
+      .map((callout) => callout.entityKey));
+    const mainKeys = new Set([this.sim.hoveredKey, this.sim.selectedKey].filter((key) => {
+      const entity = this.store.entities.get(key);
+      return entity && !entity.leaving && isMainCalloutSession(entity.session);
+    }));
+    for (const key of mainKeys) focused.add(key);
+    for (const callout of expanded) {
+      if (callout.kind !== 'message') continue;
+      const entity = this.store.entities.get(callout.entityKey);
+      const content = entity ? this.expandedCalloutContent(ctx, callout, entity) : null;
+      if (entity && add(callout, entity, content, `${entity.key}:message`)
+        && isMainCalloutSession(entity.session)) mainKeys.add(entity.key);
+    }
+
+    const showMainInformation = () => {
+      for (const kind of ['work', 'result', 'context']) {
+        for (const key of mainKeys) {
+          const id = `${key}:${kind}`;
+          if (seen.has(id)) continue;
+          const callout = this.sim.mainCallouts.get(id);
+          const entity = this.store.entities.get(key);
+          if (callout?.alpha > 0.01 && entity) {
+            add(callout, entity, this.mainCalloutContent(ctx, callout), id);
+          }
+        }
+      }
+    };
+    showMainInformation();
+
+    const automatic = new Map();
+    for (const callout of this.sim.mainCallouts.values()) {
+      if (callout.alpha > 0.01) automatic.set(callout.entityKey, callout);
+    }
+    for (const callout of this.sim.workCallouts.values()) {
+      if (callout.alpha > 0.01) automatic.set(callout.entityKey, callout);
+    }
+    for (const callout of this.store.spotlightCallouts.values()) {
+      if (callout.alpha > 0.01) automatic.set(callout.entityKey, callout);
+    }
+    let displayed = 0;
+    const candidates = [...automatic.values()].sort((left, right) =>
+      Number(isMainCalloutSession(this.store.entities.get(right.entityKey)?.session))
+        - Number(isMainCalloutSession(this.store.entities.get(left.entityKey)?.session))
+      || Number(Boolean(right.message)) - Number(Boolean(left.message))
+      || (right.messageAt ?? right.at ?? 0) - (left.messageAt ?? left.at ?? 0)
+      || compareText(left.entityKey, right.entityKey));
+    const showAutomatic = (callout) => {
+      if (displayed >= SPOTLIGHT_CALLOUT_LIMIT) return;
+      const entity = this.store.entities.get(callout.entityKey);
+      if (!entity) return;
+      if (focused.has(callout.entityKey)
+        && (!isMainCalloutSession(entity.session) || mainKeys.has(entity.key))) return;
+      let content = focused.has(entity.key)
+        || (isMainCalloutSession(entity.session) && callout.hasMessage === false)
+        ? null : this.messageCalloutContent(ctx, entity, callout.message, false);
+      const work = this.sim.workCallouts.get(entity.key);
+      const combined = {
+        ...callout,
+        alpha: Math.max(callout.alpha, work?.alpha || 0),
+        reach: Math.max(callout.reach, work?.reach || 0),
+      };
+      if (content) {
+        content.hasMessage = content.hasMessage && callout.hasMessage !== false;
+        content.messageOpacity = callout.message ? callout.alpha / combined.alpha : 1;
+        content.workOpacity = (work?.alpha || 0) / combined.alpha;
+      }
+      let placed = add(combined, entity, content, `${entity.key}:message`);
+      // Missing or crowded speech must not suppress a smaller observed readout.
+      if (!placed && isMainCalloutSession(entity.session)) {
+        for (const kind of ['work', 'result', 'context']) {
+          const id = `${entity.key}:${kind}`;
+          const fallback = this.sim.mainCallouts.get(id);
+          if (fallback?.alpha > 0.01 && add(fallback, entity, this.mainCalloutContent(ctx, fallback), id)) {
+            placed = true;
+            break;
+          }
+        }
+      }
+      if (placed) {
+        displayed += 1;
+        if (isMainCalloutSession(entity.session)) mainKeys.add(entity.key);
+      }
+    };
+    for (const callout of candidates) {
+      if (isMainCalloutSession(this.store.entities.get(callout.entityKey)?.session)) showAutomatic(callout);
+    }
+    showMainInformation();
+    for (const callout of candidates) {
+      if (!isMainCalloutSession(this.store.entities.get(callout.entityKey)?.session)) showAutomatic(callout);
+    }
+    for (const callout of expanded) {
+      if (callout.kind === 'message') continue;
+      const entity = this.store.entities.get(callout.entityKey);
+      if (entity && !isMainCalloutSession(entity.session)) {
+        add(callout, entity, this.expandedCalloutContent(ctx, callout, entity), callout.id);
+      }
+    }
+    for (const key of this.calloutPlacements.keys()) {
+      if (!seen.has(key)) this.calloutPlacements.delete(key);
+    }
   }
 
   drawCallouts(ctx) {
-    const occupiedRects = [];
-    const expanded = [...this.sim.expandedCallouts.values()]
-      .filter((callout) => callout.alpha > 0.01)
-      .sort((left, right) => Number(right.target) - Number(left.target)
-        || left.order - right.order
-        || compareText(left.id, right.id));
-    for (const callout of expanded) {
-      const entity = this.store.entities.get(callout.entityKey);
-      const content = entity ? this.expandedCalloutContent(ctx, callout, entity) : null;
-      if (content) this.drawLeaderLineCallout(ctx, callout, entity, content, occupiedRects);
-    }
-
-    const spotlights = [...this.store.spotlightCallouts.values()]
-      .filter((callout) => callout.alpha > 0.01)
-      .sort((left, right) => right.messageAt - left.messageAt
-        || right.sequence - left.sequence);
-    for (const callout of spotlights) {
-      const entity = this.store.entities.get(callout.entityKey);
-      if (!entity) continue;
-      ctx.font = 'italic 9px system-ui, sans-serif';
-      const lines = this.wrapText(ctx, callout.message, CALLOUT_LABEL_MAX_WIDTH, 2);
-      if (!lines.length) continue;
-      this.drawLeaderLineCallout(ctx, callout, entity, {
-        lines,
-        font: 'italic 9px system-ui, sans-serif',
-        textOpacity: 0.66,
-      }, occupiedRects);
+    for (const { callout, entity, content, geometry } of this.preparedCallouts) {
+      this.drawLeaderLineCallout(ctx, callout, entity, content, geometry);
     }
   }
 
+  messageCalloutContent(ctx, entity, message, expanded) {
+    const main = isMainCalloutSession(entity.session);
+    const font = '11px system-ui, sans-serif';
+    const width = Math.min(main ? this.mainCalloutWidth(entity) : expanded ? 220 : CALLOUT_LABEL_MAX_WIDTH,
+      this.width - 2 * CALLOUT_MARGIN - 8);
+    if (width < 40) return null;
+    ctx.font = font;
+    const lines = this.wrapText(ctx, message, width, expanded ? 6 : 4);
+    const messageLines = lines.length;
+    const work = this.sim.workCallouts.get(entity.key);
+    if (!main && work?.alpha > 0.01) {
+      ctx.font = '10px system-ui, sans-serif';
+      lines.push(this.fitText(ctx, work.text, width));
+    }
+    return lines.length ? {
+      lines, font, textOpacity: 0.72, messageLines, hasMessage: messageLines > 0,
+      title: main ? (entity.session.lastMessageKind === 'final' ? 'Latest reply' : 'Latest update') : null,
+      preferredSlots: main ? ['NE', 'NW', 'SE', 'SW'] : null,
+      workOpacity: work?.alpha || 0,
+    } : null;
+  }
+
+  mainCalloutContent(ctx, callout) {
+    const font = '11px system-ui, sans-serif';
+    ctx.font = font;
+    const width = this.mainCalloutWidth(this.store.entities.get(callout.entityKey));
+    if (width < 40) return null;
+    const lines = [];
+    // Keep a line for every observed field before giving long fields extra space.
+    const paragraphs = callout.paragraphs.slice(0, 4);
+    paragraphs.forEach((paragraph, index) => {
+      const remaining = 4 - lines.length - (paragraphs.length - index - 1);
+      lines.push(...this.wrapText(ctx, paragraph, width, remaining));
+    });
+    const slots = {
+      work: ['NW', 'NE', 'SW', 'SE'],
+      result: ['SE', 'SW', 'NE', 'NW'],
+      context: ['SW', 'SE', 'NW', 'NE'],
+    };
+    return lines.length ? { lines, font, title: callout.title, textOpacity: 0.72,
+      preferredSlots: slots[callout.kind] } : null;
+  }
+
+  mainCalloutWidth(entity) {
+    const sideSpace = entity ? Math.min(entity.x, this.width - entity.x) : 344;
+    return Math.min(240, Math.max(140, sideSpace - 104), this.width - 2 * CALLOUT_MARGIN - 8);
+  }
+
   expandedCalloutContent(ctx, callout, entity) {
-    if (callout.kind === 'message' && entity.session.lastMessage) {
-      const font = 'italic 9px system-ui, sans-serif';
-      ctx.font = font;
-      return {
-        lines: [this.fitText(ctx, entity.session.lastMessage, CALLOUT_LABEL_MAX_WIDTH)],
-        font,
-        textOpacity: 0.66,
-      };
+    if (callout.kind === 'message') {
+      const body = persistentCalloutFor(entity.session);
+      const content = this.messageCalloutContent(ctx, entity, body?.message, true);
+      if (content) content.hasMessage = content.hasMessage && body?.hasMessage === true;
+      return content;
     }
     if (callout.kind === 'branch' && entity.session.gitBranch) {
       const font = '9px system-ui, sans-serif';
@@ -2185,30 +2380,85 @@ class Renderer {
     return null;
   }
 
-  drawLeaderLineCallout(ctx, callout, entity, content, occupiedRects) {
-    if (entity.opacity < 0.05 || !Number.isFinite(entity.x) || !Number.isFinite(entity.y)) return;
+  calloutObstacles() {
+    const obstacles = [];
+    for (const pool of this.sim.pools.values()) {
+      if (pool.opacity < 0.05) continue;
+      const halfWidth = Math.max(180, pool.radius * 0.88);
+      obstacles.push({ x: pool.x - halfWidth, y: pool.y - pool.radius - 30,
+        width: halfWidth * 2, height: 46 });
+    }
+    for (const entity of this.store.entities.values()) {
+      if (entity.opacity < 0.05 || !Number.isFinite(entity.x) || !Number.isFinite(entity.y)) continue;
+      const radius = entity.baseRadius * entity.scale;
+      const halo = radius + 5;
+      obstacles.push({ x: entity.x - halo, y: entity.y - halo, width: halo * 2, height: halo * 2,
+        orbKey: entity.key });
+      if (isChildSession(entity.session)) {
+        const direction = entity.beltSlot % 2 === 1 ? -1 : 1;
+        obstacles.push({ x: entity.x - 43, y: entity.y + direction * radius * 1.9 - 6, width: 86, height: 12 });
+      } else {
+        obstacles.push({ x: entity.x - 73, y: entity.y + radius * 1.9 - 8, width: 146, height: 42 });
+      }
+    }
+    return obstacles;
+  }
+
+  placeCallout(ctx, entity, content, occupiedRects, key, occupiedLeaders = []) {
+    if (!Number.isFinite(entity.x) || !Number.isFinite(entity.y)) return null;
+    ctx.font = content.font;
+    const labelWidth = Math.max(content.title ? ctx.measureText(content.title).width : 0,
+      ...content.lines.map((line, index) => {
+      ctx.font = index >= content.messageLines ? '10px system-ui, sans-serif' : content.font;
+      return ctx.measureText(line).width;
+    }));
+    const labelHeight = content.lines.length * CALLOUT_LABEL_LINE_HEIGHT + (content.title ? 20 : 0);
+    const signature = JSON.stringify([this.width, this.height, labelWidth, labelHeight]);
+    const cached = this.calloutPlacements.get(key);
+    const fits = (candidate) => candidate.collisionRect.x >= CALLOUT_MARGIN
+      && candidate.collisionRect.y >= CALLOUT_MARGIN
+      && candidate.collisionRect.x + candidate.collisionRect.width <= this.width - CALLOUT_MARGIN
+      && candidate.collisionRect.y + candidate.collisionRect.height <= this.height - CALLOUT_MARGIN
+      && !occupiedRects.some((rect) => this.rectsOverlap(rect, candidate.collisionRect))
+      && !occupiedRects.some((rect) => rect.orbKey !== entity.key && this.leaderCrossesRect(candidate, rect))
+      && !occupiedLeaders.some((leader) => this.leaderCrossesRect(leader, candidate.collisionRect));
+    let geometry = null;
+    if (cached) {
+      const previous = this.calloutGeometry(entity, cached.slotName, labelWidth, labelHeight, cached.distance);
+      if (fits(previous)) {
+        geometry = previous;
+      } else if (cached.signature === signature && (cached.hiddenAt === null || this.sim.time - cached.hiddenAt < 1)) {
+        if (cached.hiddenAt === null) cached.hiddenAt = this.sim.time;
+        return null;
+      }
+    }
+    if (!geometry) {
+      const preferred = content.preferredSlots || this.calloutSlotNames(entity);
+      const slots = [...preferred, 'NNE', 'NNW', 'ENE', 'WNW', 'N'];
+      const distances = isMainCalloutSession(entity.session)
+        ? [48, 64, 92, 136, 180, 224] : [CALLOUT_DIAGONAL_LENGTH, 56, 88, 136, 180];
+      const candidates = distances.flatMap((distance) =>
+        slots.map((slot) => this.calloutGeometry(entity, slot, labelWidth, labelHeight, distance)));
+      geometry = candidates.find(fits);
+    }
+    if (!geometry) return null;
+    this.calloutPlacements.set(key, {
+      signature, slotName: geometry.slotName, distance: geometry.distance, hiddenAt: null,
+    });
+    occupiedRects.push(geometry.collisionRect);
+    return geometry;
+  }
+
+  drawLeaderLineCallout(ctx, callout, entity, content, geometry) {
     ctx.save();
     ctx.font = content.font;
-    const labelWidth = Math.max(...content.lines.map((line) => ctx.measureText(line).width));
-    const labelHeight = content.lines.length * CALLOUT_LABEL_LINE_HEIGHT;
-    const slotNames = this.calloutSlotNames(entity);
-    const candidates = slotNames.map(
-      (slotName) => this.calloutGeometry(entity, slotName, labelWidth, labelHeight),
-    );
-    const fallback = candidates[0];
-    const hasCollision = (candidate) => occupiedRects
-      .some((rect) => this.rectsOverlap(rect, candidate.collisionRect));
-    const geometry = candidates.find((candidate) => !hasCollision(candidate))
-      || fallback;
-    occupiedRects.push(geometry.collisionRect);
-
     const alpha = clamp(callout.alpha * entity.opacity, 0, 1);
     const reach = clamp(callout.reach, 0, 1);
     const diagonalLength = Math.hypot(
       geometry.elbowX - geometry.anchorX,
       geometry.shelfY - geometry.anchorY,
     );
-    const shelfLength = labelWidth + 6;
+    const shelfLength = Math.abs(geometry.shelfEndX - geometry.elbowX);
     const reachedLength = (diagonalLength + shelfLength) * reach;
     const diagonalProgress = diagonalLength > 0
       ? clamp(reachedLength / diagonalLength, 0, 1)
@@ -2217,9 +2467,9 @@ class Renderer {
       ? clamp((reachedLength - diagonalLength) / shelfLength, 0, 1)
       : 1;
 
-    ctx.strokeStyle = `rgba(255, 255, 255, ${0.10 * alpha})`;
-    ctx.fillStyle = `rgba(255, 255, 255, ${0.10 * alpha})`;
-    ctx.lineWidth = 0.8;
+    ctx.strokeStyle = `rgba(255, 255, 255, ${0.24 * alpha})`;
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.45 * alpha})`;
+    ctx.lineWidth = 1;
     ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.arc(geometry.anchorX, geometry.anchorY, 1.2, 0, TAU);
@@ -2245,11 +2495,22 @@ class Renderer {
       ctx.fillStyle = `rgba(255, 255, 255, ${content.textOpacity})`;
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
+      ctx.shadowColor = '#0a0e18';
+      ctx.shadowBlur = 4;
+      if (content.title) {
+        ctx.font = '600 10px system-ui, sans-serif';
+        ctx.fillStyle = (SOURCE_COLORS[entity.session.source] || SOURCE_COLORS.codex).core;
+        ctx.fillText(content.title, geometry.labelX, geometry.labelY);
+      }
       content.lines.forEach((line, index) => {
+        const supplement = index >= content.messageLines;
+        ctx.globalAlpha = alpha * labelReveal * (supplement ? content.workOpacity ?? 1 : content.messageOpacity ?? 1);
+        ctx.font = supplement ? '10px system-ui, sans-serif' : content.font;
+        ctx.fillStyle = `rgba(255, 255, 255, ${supplement ? 0.64 : content.textOpacity})`;
         ctx.fillText(
           line,
           geometry.labelX,
-          geometry.labelY + index * CALLOUT_LABEL_LINE_HEIGHT,
+          geometry.labelY + (content.title ? 20 : 0) + index * CALLOUT_LABEL_LINE_HEIGHT,
         );
       });
     }
@@ -2257,43 +2518,32 @@ class Renderer {
   }
 
   calloutSlotNames(entity) {
-    const satelliteNameplateIsAbove = entity.isSatellite && entity.beltSlot % 2 === 1;
+    const satelliteNameplateIsAbove = isChildSession(entity.session) && entity.beltSlot % 2 === 1;
     return satelliteNameplateIsAbove
       ? ['SE', 'SW', 'NE', 'NW']
       : ['NE', 'NW', 'SE', 'SW'];
   }
 
-  calloutGeometry(entity, slotName, labelWidth, labelHeight) {
-    const angle = CALLOUT_SLOTS[slotName];
+  calloutGeometry(entity, slotName, labelWidth, labelHeight, distance = CALLOUT_DIAGONAL_LENGTH) {
+    // Lower leaders leave sideways first, clear of the permanent nameplate.
+    const angle = slotName === 'SE' ? 18 * Math.PI / 180
+      : slotName === 'SW' ? 162 * Math.PI / 180 : CALLOUT_SLOTS[slotName];
     const directionX = Math.cos(angle);
     const directionY = Math.sin(angle);
     const radius = entity.baseRadius * entity.scale;
     const anchorX = entity.x + directionX * (radius + 4);
     const anchorY = entity.y + directionY * (radius + 4);
-    const elbowX = anchorX + directionX * CALLOUT_DIAGONAL_LENGTH;
-    const shelfY = anchorY + directionY * CALLOUT_DIAGONAL_LENGTH;
-    const labelXForDirection = (shelfDirection) => shelfDirection > 0
+    const elbowX = anchorX + directionX * distance;
+    const shelfY = anchorY + directionY * distance;
+    const shelfDirection = directionX >= 0 ? 1 : -1;
+    const labelX = shelfDirection > 0
       ? elbowX + 3
       : elbowX - labelWidth - 3;
-    const fitsHorizontally = (labelX) => labelX >= CALLOUT_MARGIN
-      && labelX + labelWidth <= this.width - CALLOUT_MARGIN;
-    let shelfDirection = directionX >= 0 ? 1 : -1;
-    let idealLabelX = labelXForDirection(shelfDirection);
-    if (!fitsHorizontally(idealLabelX)) {
-      const oppositeLabelX = labelXForDirection(-shelfDirection);
-      if (fitsHorizontally(oppositeLabelX)) {
-        shelfDirection *= -1;
-        idealLabelX = oppositeLabelX;
-      }
-    }
-    const idealLabelY = shelfY - labelHeight - 3;
-    const maximumX = Math.max(CALLOUT_MARGIN, this.width - labelWidth - CALLOUT_MARGIN);
-    const maximumY = Math.max(CALLOUT_MARGIN, this.height - labelHeight - CALLOUT_MARGIN);
-    const labelX = clamp(idealLabelX, CALLOUT_MARGIN, maximumX);
-    const labelY = clamp(idealLabelY, CALLOUT_MARGIN, maximumY);
+    const labelY = directionY < 0 ? shelfY - labelHeight - 3 : shelfY + 3;
     const shelfEndX = elbowX + shelfDirection * (labelWidth + 6);
     return {
       slotName,
+      distance,
       anchorX,
       anchorY,
       elbowX,
@@ -2302,10 +2552,10 @@ class Renderer {
       labelX,
       labelY,
       collisionRect: {
-        x: labelX - 2,
-        y: labelY - 2,
-        width: labelWidth + 4,
-        height: labelHeight + 4,
+        x: labelX - 6,
+        y: labelY - 6,
+        width: labelWidth + 12,
+        height: labelHeight + 12,
       },
     };
   }
@@ -2315,6 +2565,25 @@ class Renderer {
       && left.x + left.width > right.x
       && left.y < right.y + right.height
       && left.y + left.height > right.y;
+  }
+
+  leaderCrossesRect(geometry, rect) {
+    const intersects = (x1, y1, x2, y2) => {
+      let from = 0;
+      let to = 1;
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      for (const [p, q] of [[-dx, x1 - rect.x], [dx, rect.x + rect.width - x1],
+        [-dy, y1 - rect.y], [dy, rect.y + rect.height - y1]]) {
+        if (p === 0) { if (q < 0) return false; }
+        else if (p < 0) from = Math.max(from, q / p);
+        else to = Math.min(to, q / p);
+        if (from > to) return false;
+      }
+      return true;
+    };
+    return intersects(geometry.anchorX, geometry.anchorY, geometry.elbowX, geometry.shelfY)
+      || intersects(geometry.elbowX, geometry.shelfY, geometry.shelfEndX, geometry.shelfY);
   }
 
   wrapText(ctx, value, maximumWidth, maximumLines) {
@@ -2631,7 +2900,7 @@ class DetailPanel {
     let toolCalls = 0;
     for (const session of sessions) {
       statuses[session.status] += 1;
-      if (session.parentId) subAgentCount += 1;
+      if (isChildSession(session)) subAgentCount += 1;
       subAgentCount += session.subAgents.length;
       if (session.model) modelCounts.set(session.model, (modelCounts.get(session.model) ?? 0) + 1);
       if (session.writeAccess === 'write') writeCount += 1;
@@ -2679,9 +2948,12 @@ class DetailPanel {
     visited.add(session.key);
     const item = document.createElement('li');
     item.className = 'overview-session-node';
+    const rootlessChild = isChildSession(session) && !projectSessions
+      .some((candidate) => candidate.id === session.parentId && candidate.key !== session.key);
+    const state = STATUS_LABELS[session.status] || session.status;
     item.append(this.createOverviewRow(
       session.title,
-      STATUS_LABELS[session.status] || session.status,
+      rootlessChild ? `Sub-agent · ${state}` : state,
       session.status,
       () => this.open(session.key),
       session,

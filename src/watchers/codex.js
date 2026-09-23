@@ -14,9 +14,8 @@ import {
   addToolCall,
   collectActiveSessions,
   createSession,
-  isActiveSession,
   isRetainedSession,
-  isRunningSession,
+  isVisibleSession,
   normalizeCwd,
   observeSessionTimestamp,
   setFirstUserPrompt,
@@ -116,8 +115,19 @@ function fallbackId(filePath) {
 function rolloutUuid(filePath) {
   const name = path.basename(filePath, path.extname(filePath));
   if (!/^rollout-/i.test(name)) return null;
-  const match = name.match(/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i);
+  // Paginated rollouts append a segment UUID to the session UUID. The latter
+  // is still session_meta.id; guardian session_id can instead name its parent.
+  const match = name.match(/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(?:_[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})?$/i);
   return match?.[1] ?? null;
+}
+
+function compareRolloutPaths(left, right) {
+  const leftName = path.basename(left);
+  const rightName = path.basename(right);
+  // The rollout timestamp sorts chronologically, unaffected by later writes
+  // to an older segment. The remaining filename/path breaks ties consistently.
+  if (leftName !== rightName) return leftName < rightName ? -1 : 1;
+  return left === right ? 0 : left < right ? -1 : 1;
 }
 
 function userMessageText(payload) {
@@ -600,71 +610,120 @@ export function createCodexWatcher({
   let parentRestoration = Promise.resolve();
   let watcher = null;
 
+  function latestFilePath(id) {
+    let latest = null;
+    for (const filePath of filePathsById.get(id) ?? []) {
+      if (latest === null || compareRolloutPaths(filePath, latest) > 0) latest = filePath;
+    }
+    return latest;
+  }
+
+  function rememberFile(filePath) {
+    const id = rolloutUuid(filePath);
+    if (!id) return filePath;
+    if (!filePathsById.has(id)) filePathsById.set(id, new Set());
+    filePathsById.get(id).add(filePath);
+    return latestFilePath(id);
+  }
+
   function enqueue(filePath, operation) {
-    const previous = fileQueues.get(filePath) ?? Promise.resolve();
+    // Segments of one session share a queue, so an older in-flight read cannot
+    // finish after its replacement and reintroduce a duplicate session.
+    const queueKey = rolloutUuid(filePath) ?? filePath;
+    const previous = fileQueues.get(queueKey) ?? Promise.resolve();
     const current = previous
       .catch(() => {})
       .then(operation)
       .catch((error) => debug(`queued operation failed for ${filePath}`, error))
       .finally(() => {
-        if (fileQueues.get(filePath) === current) fileQueues.delete(filePath);
+        if (fileQueues.get(queueKey) === current) fileQueues.delete(queueKey);
       });
-    fileQueues.set(filePath, current);
+    fileQueues.set(queueKey, current);
     return current;
+  }
+
+  async function processCandidate(filePath, fileSessionId) {
+    try {
+      const result = await tail.read(filePath);
+      let session = sessions.get(filePath);
+      const initial = !session || result.reset;
+      if (!session && result.metaRecords.length === 0 && result.records.length === 0) return false;
+      const requiresIdentity = fileSessionId && (path.basename(filePath).includes(`${fileSessionId}_`)
+        || [...sessions.entries()].some(([otherPath, other]) => (
+          otherPath !== filePath && other.id === fileSessionId
+        )));
+      // Compound segments and replacement files must confirm their identity.
+      // Ordinary first rollouts retain support for logs without session_meta.
+      if (!session && requiresIdentity && ![...result.metaRecords, ...result.records].some((record) => (
+        record?.type === 'session_meta' && record.payload?.id === fileSessionId
+      ))) return false;
+      if (initial) {
+        session = createSession(
+          fileSessionId ?? fallbackId(filePath),
+          'codex',
+          normalizeCwd(fileSessionId ? path.join(root, fileSessionId) : path.resolve(filePath)),
+        );
+      }
+      for (const record of result.metaRecords) applyMetaRecord(session, record, fileSessionId);
+      // The next task_started may be in the skipped middle. Historical head
+      // messages must not suppress identical messages from the current tail.
+      if (result.metaRecords.length > 0) {
+        resetMessages(session);
+        session.codexLastAgentMessageKey = null;
+      }
+      const retirement = initial && (result.truncated || !result.records.some(isTaskBoundary))
+        ? await recoverRetirementState(filePath, result.endOffset, result.records)
+        : null;
+      if (retirement) {
+        // Seed lifecycle acceptance before replay, without importing historical
+        // public status, tools, messages, usage or execution details.
+        session.retirementTaskActive = retirement.retirementTaskActive;
+        session.completedAt = retirement.completedAt;
+        session.completedTurnId = retirement.completedTurnId;
+        session.codexTurnId = retirement.codexTurnId;
+        for (const turnId of retirement.codexKnownTurnIds ?? []) rememberTurn(session, turnId);
+        const pastTurnIds = [...(retirement.codexExecution?.turns ?? [])]
+          .filter((id) => id !== retirement.codexDetails?.turn?.id);
+        seedCodexTurnHistory(session, pastTurnIds, retirement.codexTurnId ?? retirement.completedTurnId);
+      }
+      if (initial && !result.records.some((record) => record?.type === 'turn_context')) {
+        const context = await readLatestJsonlRecord(filePath, (record) => record?.type === 'turn_context', {
+          endOffset: result.endOffset,
+        });
+        // Only turn metadata is recovered. The skipped history must not replay
+        // old tools, usage notifications, or task transitions.
+        if (context) applyRecord(session, context, fileSessionId);
+      }
+      for (const record of result.records) applyRecord(session, record, fileSessionId);
+      if (initial) {
+        for (const previousPath of filePathsById.get(fileSessionId) ?? []) {
+          if (previousPath === filePath || !sessions.has(previousPath)) continue;
+          tail.forget(previousPath);
+          sessions.delete(previousPath);
+        }
+        sessions.set(filePath, session);
+      }
+      if (result.metaRecords.length > 0 || result.records.length > 0 || result.reset) onUpdate();
+      return true;
+    } catch (error) {
+      debug(`could not process ${filePath}`, error);
+      return false;
+    }
   }
 
   function processFile(filePath) {
     if (!isSessionLog(filePath, root)) return;
-    const id = rolloutUuid(filePath);
-    if (id) filePathsById.set(id, filePath);
+    rememberFile(filePath);
+    const fileSessionId = rolloutUuid(filePath);
     return enqueue(filePath, async () => {
-      try {
-        const result = await tail.read(filePath);
-        const fileSessionId = rolloutUuid(filePath);
-        let session = sessions.get(filePath);
-        const initial = !session || result.reset;
-        if (initial) {
-          session = createSession(
-            fallbackId(filePath),
-            'codex',
-            normalizeCwd(path.resolve(filePath)),
-          );
-          sessions.set(filePath, session);
-        }
-        for (const record of result.metaRecords) applyMetaRecord(session, record, fileSessionId);
-        // The next task_started may be in the skipped middle. Historical head
-        // messages must not suppress identical messages from the current tail.
-        if (result.metaRecords.length > 0) {
-          resetMessages(session);
-          session.codexLastAgentMessageKey = null;
-        }
-        const retirement = initial && (result.truncated || !result.records.some(isTaskBoundary))
-          ? await recoverRetirementState(filePath, result.endOffset, result.records)
-          : null;
-        if (retirement) {
-          // Seed lifecycle acceptance before replay, without importing historical
-          // public status, tools, messages, usage or execution details.
-          session.retirementTaskActive = retirement.retirementTaskActive;
-          session.completedAt = retirement.completedAt;
-          session.completedTurnId = retirement.completedTurnId;
-          session.codexTurnId = retirement.codexTurnId;
-          for (const turnId of retirement.codexKnownTurnIds ?? []) rememberTurn(session, turnId);
-          const pastTurnIds = [...(retirement.codexExecution?.turns ?? [])]
-            .filter((id) => id !== retirement.codexDetails?.turn?.id);
-          seedCodexTurnHistory(session, pastTurnIds, retirement.codexTurnId ?? retirement.completedTurnId);
-        }
-        if (initial && !result.records.some((record) => record?.type === 'turn_context')) {
-          const context = await readLatestJsonlRecord(filePath, (record) => record?.type === 'turn_context', {
-            endOffset: result.endOffset,
-          });
-          // Only turn metadata is recovered. The skipped history must not replay
-          // old tools, usage notifications, or task transitions.
-          if (context) applyRecord(session, context, fileSessionId);
-        }
-        for (const record of result.records) applyRecord(session, record, fileSessionId);
-        if (result.metaRecords.length > 0 || result.records.length > 0 || result.reset) onUpdate();
-      } catch (error) {
-        debug(`could not process ${filePath}`, error);
+      const candidates = fileSessionId
+        ? [...(filePathsById.get(fileSessionId) ?? [])].sort((left, right) => compareRolloutPaths(right, left))
+        : [filePath];
+      // Discovery alone does not supersede a published session. Try newer
+      // candidates until one is usable, retaining incomplete-line buffers for
+      // pending segments and continuing updates to the prior segment meanwhile.
+      for (const candidate of candidates) {
+        if (await processCandidate(candidate, fileSessionId)) break;
       }
     });
   }
@@ -672,18 +731,18 @@ export function createCodexWatcher({
   function restoreAncestors(now = Date.now()) {
     parentRestoration = parentRestoration.catch(() => {}).then(async () => {
       const visited = new Set();
-      const pending = [...sessions.values()].filter((session) => isActiveSession(session, now, windowMs)
-        && isRunningSession(session));
+      const pending = [...sessions.values()].filter((session) => isVisibleSession(session, now, windowMs));
       while (pending.length > 0) {
         const session = pending.pop();
         if (!session.parentId || visited.has(session.parentId)) continue;
         visited.add(session.parentId);
-        let parent = [...sessions.values()].find((candidate) => candidate.id === session.parentId);
+        const filePath = latestFilePath(session.parentId);
+        let parent = filePath ? sessions.get(filePath)
+          : [...sessions.values()].find((candidate) => candidate.id === session.parentId);
         if (!parent) {
-          const filePath = filePathsById.get(session.parentId);
           if (filePath) {
             await processFile(filePath);
-            parent = sessions.get(filePath);
+            parent = [...sessions.values()].find((candidate) => candidate.id === session.parentId);
           }
         }
         if (parent) pending.push(parent);
@@ -693,11 +752,10 @@ export function createCodexWatcher({
   }
 
   async function scan(now = Date.now()) {
-    const files = await findRecentLogs(root, now, (filePath) => {
-      const id = rolloutUuid(filePath);
-      if (id) filePathsById.set(id, filePath);
-    });
-    await runWithConcurrency(files, processFile);
+    const files = await findRecentLogs(root, now, rememberFile);
+    await runWithConcurrency([...new Set(files.map((filePath) => (
+      latestFilePath(rolloutUuid(filePath)) ?? filePath
+    )))], processFile);
     await restoreAncestors(now);
     return getSessions(now);
   }
@@ -727,13 +785,31 @@ export function createCodexWatcher({
     };
     watcher.on('add', processChangedFile);
     watcher.on('change', processChangedFile);
+    if (process.platform === 'win32') {
+      // Open Windows logs can grow without advancing mtime. Chokidar's change
+      // filter drops those writes, but its raw notification still reaches us.
+      watcher.on('raw', (event, filePath, details) => {
+        if (event !== 'change' || typeof filePath !== 'string'
+          || typeof details?.watchedPath !== 'string') return;
+        const watchedPath = details.watchedPath;
+        const changedPath = isSessionLog(watchedPath, root)
+          ? path.resolve(watchedPath)
+          : path.resolve(watchedPath, filePath);
+        if (isSessionLog(changedPath, root)) processChangedFile(changedPath);
+      });
+    }
     watcher.on('unlink', (filePath) => {
       if (!isSessionLog(filePath, root)) return;
       const id = rolloutUuid(filePath);
-      if (filePathsById.get(id) === filePath) filePathsById.delete(id);
+      const paths = filePathsById.get(id);
+      paths?.delete(filePath);
+      if (paths?.size === 0) filePathsById.delete(id);
       enqueue(filePath, () => {
         tail.forget(filePath);
         if (sessions.delete(filePath)) onUpdate();
+      }).then(async () => {
+        const replacement = latestFilePath(id);
+        if (replacement) await processChangedFile(replacement);
       });
     });
     watcher.on('error', (error) => debug('watch error', error));
