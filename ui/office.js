@@ -2193,7 +2193,11 @@ class Renderer {
         || compareText(left.id, right.id));
     const focused = new Set(expanded.filter((callout) => callout.kind === 'message')
       .map((callout) => callout.entityKey));
-    const mainKeys = new Set();
+    const mainKeys = new Set([this.sim.hoveredKey, this.sim.selectedKey].filter((key) => {
+      const entity = this.store.entities.get(key);
+      return entity && !entity.leaving && isMainCalloutSession(entity.session);
+    }));
+    for (const key of mainKeys) focused.add(key);
     for (const callout of expanded) {
       if (callout.kind !== 'message') continue;
       const entity = this.store.entities.get(callout.entityKey);
@@ -2201,6 +2205,21 @@ class Renderer {
       if (entity && add(callout, entity, content, `${entity.key}:message`)
         && isMainCalloutSession(entity.session)) mainKeys.add(entity.key);
     }
+
+    const showMainInformation = () => {
+      for (const kind of ['work', 'result', 'context']) {
+        for (const key of mainKeys) {
+          const id = `${key}:${kind}`;
+          if (seen.has(id)) continue;
+          const callout = this.sim.mainCallouts.get(id);
+          const entity = this.store.entities.get(key);
+          if (callout?.alpha > 0.01 && entity) {
+            add(callout, entity, this.mainCalloutContent(ctx, callout), id);
+          }
+        }
+      }
+    };
+    showMainInformation();
 
     const automatic = new Map();
     for (const callout of this.sim.mainCallouts.values()) {
@@ -2259,17 +2278,7 @@ class Renderer {
     for (const callout of candidates) {
       if (isMainCalloutSession(this.store.entities.get(callout.entityKey)?.session)) showAutomatic(callout);
     }
-    for (const kind of ['work', 'result', 'context']) {
-      for (const key of mainKeys) {
-        const id = `${key}:${kind}`;
-        if (seen.has(id)) continue;
-        const callout = this.sim.mainCallouts.get(id);
-        const entity = this.store.entities.get(key);
-        if (callout?.alpha > 0.01 && entity) {
-          add(callout, entity, this.mainCalloutContent(ctx, callout), id);
-        }
-      }
-    }
+    showMainInformation();
     for (const callout of candidates) {
       if (!isMainCalloutSession(this.store.entities.get(callout.entityKey)?.session)) showAutomatic(callout);
     }

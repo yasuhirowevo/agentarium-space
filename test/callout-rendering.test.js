@@ -273,6 +273,49 @@ function mainScene() {
   return current;
 }
 
+test('speechless focused mains show metadata beyond the four automatic agents', () => {
+  for (const focus of ['hover', 'selection']) {
+    const current = scene(5);
+    const target = { ...current.sessions[4], lastMessage: null, lastMessageText: null,
+      model: 'fixture-model', gitBranch: 'fixture-branch' };
+    current.renderer.height = 1300;
+    current.sim.height = 1300;
+    current.store.applySnapshot([...current.sessions.slice(0, 4), target]);
+    current.sim.syncSnapshot();
+    current.sim.update(1, 1);
+    const position = () => {
+      current.sim.pools.clear();
+      current.entities.forEach((entity, index) => Object.assign(entity, {
+        x: 260 + (index % 2) * 600, y: 220 + Math.floor(index / 2) * 400,
+        opacity: 1, scale: 1, baseRadius: 18,
+      }));
+    };
+    position();
+    current.renderer.prepareCallouts(current.ctx);
+    assert.equal(current.renderer.preparedCallouts.length, 4);
+    assert.ok(current.renderer.preparedCallouts.every(({ entity }) => entity.key !== target.key));
+
+    current.sim.setFamilyFocus(focus === 'hover' ? target.key : null,
+      focus === 'selection' ? target.key : null);
+    current.sim.update(1 / 30, 2);
+    position();
+    current.renderer.prepareCallouts(current.ctx);
+    const focused = current.renderer.preparedCallouts.filter(({ entity }) => entity.key === target.key);
+    assert.equal(focused.length, 1);
+    assert.equal(focused[0].content.title, 'Session');
+    assert.match(focused[0].content.lines.join(''), /fixture-model/);
+    assert.match(focused[0].content.lines.join(''), /fixture-branch/);
+    assert.equal(current.renderer.preparedCallouts.filter(({ entity }) => entity.key !== target.key).length, 4);
+
+    current.sim.setFamilyFocus(null, null);
+    current.sim.update(1, 3);
+    position();
+    current.renderer.prepareCallouts(current.ctx);
+    assert.equal(current.renderer.preparedCallouts.length, 4);
+    assert.ok(current.renderer.preparedCallouts.every(({ entity }) => entity.key !== target.key));
+  }
+});
+
 test('a main agent shows four distinct readable leaders without requiring focus', () => {
   const { renderer, ctx } = mainScene();
   renderer.prepareCallouts(ctx);
