@@ -4,6 +4,14 @@
 セッションと sub-agent を「星図の下で発光する生き物たちの生態系」として鳥瞰表示するデスクトップアプリ。
 本書は**仕様の正典**。デザイン判断の「なぜ」と拡張時の判断基準は [PHILOSOPHY.md](./PHILOSOPHY.md) を参照。
 
+## 注記の明るさと状態表記（v2.31）
+
+- 引出線の発話とメイン情報の本文は不透明度72%に抑える。見出しは本文より明るい既存の
+  source色を維持し、文字サイズ・行数・補助行・配置は変えない。
+- `Work`の見出しは、turn状態を取得できた場合に`Turn status`、ツール情報だけの場合に
+  `Activity`とする。状態は`In progress` / `Completed` / `Interrupted`で示し、時間は
+  実行中に`Elapsed`、完了・中断後に`Duration`を添える。完了後の時間は処理の所要時間で固定する。
+
 ## 子エージェントの識別と親の表示維持（v2.30）
 
 - Codexの分割ログ `rollout-<日時>-<session ID>_<segment ID>.jsonl` は前側のsession IDで

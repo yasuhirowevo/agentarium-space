@@ -2306,7 +2306,7 @@ class Renderer {
       lines.push(this.fitText(ctx, work.text, width));
     }
     return lines.length ? {
-      lines, font, textOpacity: 0.82, messageLines, hasMessage: messageLines > 0,
+      lines, font, textOpacity: 0.72, messageLines, hasMessage: messageLines > 0,
       title: main ? (entity.session.lastMessageKind === 'final' ? 'Latest reply' : 'Latest update') : null,
       preferredSlots: main ? ['NE', 'NW', 'SE', 'SW'] : null,
       workOpacity: work?.alpha || 0,
@@ -2330,7 +2330,7 @@ class Renderer {
       result: ['SE', 'SW', 'NE', 'NW'],
       context: ['SW', 'SE', 'NW', 'NE'],
     };
-    return lines.length ? { lines, font, title: callout.title, textOpacity: 0.82,
+    return lines.length ? { lines, font, title: callout.title, textOpacity: 0.72,
       preferredSlots: slots[callout.kind] } : null;
   }
 

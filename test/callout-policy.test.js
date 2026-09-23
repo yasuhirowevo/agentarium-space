@@ -181,10 +181,10 @@ test('main work keeps turn duration, explicit waiting and current plan in three 
     ] },
   }, { activity: 'wait_agent' });
   const result = mainCalloutsFor(session, [{ source: 'codex', id: 'child', title: 'Fixture reviewer' }], NOW);
-  assert.deepEqual(result, [{ kind: 'work', title: 'Work', paragraphs: [
-    'Current turn · 1m 0s', 'wait_agent · Waiting · Fixture reviewer', 'Plan 1/3 completed · Review fixture',
+  assert.deepEqual(result, [{ kind: 'work', title: 'Turn status', paragraphs: [
+    'In progress · Elapsed 1m 0s', 'wait_agent · Waiting · Fixture reviewer', 'Plan 1/3 completed · Review fixture',
   ] }]);
-  assert.equal(mainCalloutsFor(session, [], NOW + 1000)[0].paragraphs[0], 'Current turn · 1m 1s');
+  assert.equal(mainCalloutsFor(session, [], NOW + 1000)[0].paragraphs[0], 'In progress · Elapsed 1m 1s');
 });
 
 test('main work does not present inactive or mismatched plans and waits as current work', () => {
@@ -257,7 +257,7 @@ test('main Claude readouts use only observed activity and session metadata', () 
     codexDetails: { effort: 'Incorrect source', turn: { status: 'active' } },
   };
   assert.deepEqual(mainCalloutsFor(session, [], NOW), [
-    { kind: 'work', title: 'Work', paragraphs: ['Read: fixture.js'] },
+    { kind: 'work', title: 'Activity', paragraphs: ['Read: fixture.js'] },
     { kind: 'context', title: 'Session', paragraphs: ['fixture-model', 'CTX 12k tokens · OUT 42 tokens', 'Branch · fixture'] },
   ]);
 });

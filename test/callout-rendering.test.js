@@ -278,10 +278,10 @@ test('a main agent shows four distinct readable leaders without requiring focus'
   renderer.prepareCallouts(ctx);
   assert.equal(renderer.preparedCallouts.length, 4);
   assert.deepEqual(Array.from(renderer.preparedCallouts, ({ content }) => content.title).sort(),
-    ['Latest update', 'Result', 'Session', 'Work']);
+    ['Latest update', 'Result', 'Session', 'Turn status']);
   for (const { content, geometry } of renderer.preparedCallouts) {
     assert.equal(content.font, '11px system-ui, sans-serif');
-    assert.ok(content.textOpacity >= 0.8);
+    assert.equal(content.textOpacity, 0.72);
     for (const other of renderer.preparedCallouts) {
       if (other.geometry === geometry) continue;
       assert.equal(renderer.rectsOverlap(geometry.collisionRect, other.geometry.collisionRect), false);
@@ -357,7 +357,7 @@ test('a main leader routes around a nearby satellite as well as its text', () =>
   Object.assign(parent, { x: 400, y: 350, baseRadius: 18 });
   Object.assign(child, { x: 435, y: 325, baseRadius: 10, isSatellite: true, beltSlot: 0 });
   const content = { lines: ['Current turn', 'Read source', 'Plan 1/3 completed', 'Review changes'],
-    title: 'Work', font: '11px system-ui, sans-serif', textOpacity: 0.82, preferredSlots: ['NE', 'NW', 'SE', 'SW'] };
+    title: 'Turn status', font: '11px system-ui, sans-serif', textOpacity: 0.72, preferredSlots: ['NE', 'NW', 'SE', 'SW'] };
   const obstacles = current.renderer.calloutObstacles();
   const geometry = current.renderer.placeCallout(current.ctx, parent, content, obstacles, 'work');
   assert.ok(geometry, 'a clear alternative direction is available');

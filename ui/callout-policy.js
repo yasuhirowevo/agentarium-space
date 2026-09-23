@@ -66,10 +66,14 @@ export function mainCalloutsFor(session, sessions, now = Date.now()) {
   const turnId = compactText(turn?.id);
   const active = session.status === 'thinking' || session.status === 'tool';
   const activeTurn = active && turn?.status === 'active' && turnId;
+  const hasTurnStatus = ['active', 'completed', 'interrupted'].includes(turn?.status);
   const work = [];
-  if (['active', 'completed', 'interrupted'].includes(turn?.status)) {
+  if (hasTurnStatus) {
     const readout = turnReadout(turn, now);
-    work.push(readout.duration === 'Unknown' ? readout.label : `${readout.label} · ${readout.duration}`);
+    const status = turn.status === 'active' ? 'In progress'
+      : turn.status === 'completed' ? 'Completed' : 'Interrupted';
+    const durationLabel = turn.status === 'active' ? 'Elapsed' : 'Duration';
+    work.push(readout.duration === 'Unknown' ? status : `${status} · ${durationLabel} ${readout.duration}`);
   }
   const activity = session.status === 'tool' ? compactText(session.activity) : null;
   const detail = compactText(session.activityDetail);
@@ -133,7 +137,7 @@ export function mainCalloutsFor(session, sessions, now = Date.now()) {
   const branch = compactText(session.gitBranch, 120);
   if (branch) context.push(`Branch · ${branch}`);
 
-  return [callout('work', 'Work', work), callout('result', 'Result', result),
+  return [callout('work', hasTurnStatus ? 'Turn status' : 'Activity', work), callout('result', 'Result', result),
     callout('context', 'Session', context)].filter(Boolean);
 }
 
