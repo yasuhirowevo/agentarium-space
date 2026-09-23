@@ -23,7 +23,7 @@ The command creates three files in the ignored `dist/demo/` directory:
 
 | File | Contents |
 |---|---|
-| `agentarium-space-demo.mp4` | 24-second silent H.264 video, 1440 × 900, 30 fps |
+| `agentarium-space-demo.mp4` | 24-second silent H.264 video, 1920 × 1080, 30 fps |
 | `agentarium-space-demo.png` | Still image from the same application view |
 | `snapshots.json` | Broadcast session fields used for privacy review |
 
@@ -31,6 +31,7 @@ Both watcher roots and Electron's profile are created in a fresh temporary
 directory, which is removed after Electron exits. Offscreen rendering captures
 only the application content. Recording begins after layout settles, selects the
 forecast session at 12 seconds, and returns to the overview at 18 seconds.
+The still image is captured at 23 seconds, after the main forecast turn completes.
 
 Before publishing, inspect the complete video and still, check their metadata,
 and review `snapshots.json`. Internal watcher keys are temporary log paths used

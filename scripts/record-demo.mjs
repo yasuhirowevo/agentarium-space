@@ -15,8 +15,8 @@ import { createDemoFixture } from './demo-fixture.mjs';
 
 const repository = fileURLToPath(new URL('..', import.meta.url));
 const output = path.join(repository, 'dist', 'demo');
-const WIDTH = 1440;
-const HEIGHT = 900;
+const WIDTH = 1920;
+const HEIGHT = 1080;
 const FPS = 30;
 const DURATION_SECONDS = 24;
 const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
@@ -126,7 +126,7 @@ async function capture() {
   const started = performance.now();
   const firstPaint = paintCount;
   let previousSecond = -1;
-  console.log('Recording fictional sessions at 1440x900, 30 fps, 24 seconds.');
+  console.log('Recording fictional sessions at 1920x1080, 30 fps, 24 seconds.');
   for (let frame = 0; frame < FPS * DURATION_SECONDS; frame++) {
     const elapsedMs = frame * 1000 / FPS;
     await delay(Math.max(0, started + elapsedMs - performance.now()));
@@ -148,7 +148,7 @@ async function capture() {
       if (second === 18) {
         await window.webContents.executeJavaScript("document.querySelector('#focus-back').click()");
       }
-      if (second === 10) {
+      if (second === 23) {
         const poster = await window.webContents.capturePage();
         await writeFile(path.join(output, 'agentarium-space-demo.png'), poster.toPNG());
       }
