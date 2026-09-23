@@ -430,6 +430,19 @@ export function createClaudeWatcher({
     });
     watcher.on('add', processFile);
     watcher.on('change', processFile);
+    if (process.platform === 'win32') {
+      // Open Windows logs can grow without advancing mtime. Chokidar's change
+      // filter drops those writes, but its raw notification still reaches us.
+      watcher.on('raw', (event, filePath, details) => {
+        if (event !== 'change' || typeof filePath !== 'string'
+          || typeof details?.watchedPath !== 'string') return;
+        const watchedPath = details.watchedPath;
+        const changedPath = isDirectSessionLog(watchedPath, root)
+          ? path.resolve(watchedPath)
+          : path.resolve(watchedPath, filePath);
+        if (isDirectSessionLog(changedPath, root)) processFile(changedPath);
+      });
+    }
     watcher.on('unlink', (filePath) => {
       if (!isDirectSessionLog(filePath, root)) return;
       enqueue(filePath, () => {

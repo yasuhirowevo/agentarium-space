@@ -41,6 +41,7 @@ export function createSession(id, source, key) {
     subAgents: new Map(),
     recentEvents: [],
     lastMessage: null,
+    lastMessageText: null,
     lastMessageAt: null,
     lastMessageKind: null,
     contextUsedTokens: null,
@@ -122,10 +123,13 @@ export function setLastMessage(session, value, time, kind = 'final', { deduplica
   if (typeof value !== 'string' || !Number.isFinite(time)) return;
   const compact = value.replace(/\s+/g, ' ').trim();
   if (!compact) return;
-  const message = Array.from(compact).slice(0, 60).join('');
+  const characters = Array.from(compact);
+  const message = characters.slice(0, 60).join('');
+  const messageText = characters.slice(0, 320).join('');
   const messageKind = MESSAGE_KINDS.has(kind) ? kind : 'final';
-  if (deduplicate && session.lastMessage === message && session.lastMessageKind === messageKind) return;
+  if (deduplicate && session.lastMessageText === messageText && session.lastMessageKind === messageKind) return;
   session.lastMessage = message;
+  session.lastMessageText = messageText;
   session.lastMessageAt = time;
   session.lastMessageKind = messageKind;
   return true;
@@ -249,6 +253,7 @@ export function toPublicSession(session, now, windowMs = activeWindowMs()) {
     activity: activity?.name ?? null,
     activityDetail: activity?.detail ?? null,
     lastMessage: session.lastMessage,
+    lastMessageText: session.lastMessageText,
     lastMessageAt: session.lastMessageAt,
     lastMessageKind: MESSAGE_KINDS.has(session.lastMessageKind)
       ? session.lastMessageKind
@@ -274,6 +279,7 @@ export function toPublicSession(session, now, windowMs = activeWindowMs()) {
     lastActivity: session.lastActivity,
     gitBranch: session.gitBranch,
     parentId: session.parentId,
+    isSubAgent: isChildSession(session),
     nickname: typeof session.nickname === 'string' ? session.nickname : null,
     subAgents: Array.from(session.subAgents.values(), ({ id, label, status, startedAt }) => ({
       id,
@@ -299,7 +305,16 @@ export function isRunningSession(session) {
 }
 
 function isChildSession(session) {
-  return session.source === 'codex' && (session.isSubAgent || session.parentId || session.model === 'codex-auto-review');
+  return Boolean(session.source === 'codex'
+    && (session.isSubAgent || session.parentId || session.model === 'codex-auto-review'));
+}
+
+export function isVisibleSession(session, now, windowMs = activeWindowMs()) {
+  if (!isActiveSession(session, now, windowMs)) return false;
+  if (isChildSession(session) && Number.isFinite(session.completedAt)) {
+    return now - session.completedAt < DONE_SUB_AGENT_MS;
+  }
+  return Boolean(isRunningSession(session) || now - session.lastActivity < IDLE_AFTER_MS);
 }
 
 function sessionSelection(sessionMaps, now, windowMs) {
@@ -310,17 +325,11 @@ function sessionSelection(sessionMaps, now, windowMs) {
   for (const session of all) {
     if (!isActiveSession(session, now, windowMs)) continue;
     retained.add(session);
-    if (isChildSession(session) && Number.isFinite(session.completedAt)) {
-      if (now - session.completedAt < DONE_SUB_AGENT_MS) visible.add(session);
-    } else if (isRunningSession(session)
-      || now - session.lastActivity < IDLE_AFTER_MS) {
-      visible.add(session);
-    }
+    if (isVisibleSession(session, now, windowMs)) visible.add(session);
   }
-  // A live descendant keeps its complete ancestor chain, even if those logs
-  // have not changed recently. The child itself still obeys the stale limit.
-  for (const session of [...retained]) {
-    if (!isRunningSession(session)) continue;
+  // A visible descendant keeps its ancestor chain through its completion grace
+  // period too. It must still satisfy its own visibility and stale limits.
+  for (const session of [...visible]) {
     let ancestor = session;
     const visited = new Set([ancestor]);
     while (ancestor.parentId) {

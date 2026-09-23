@@ -90,6 +90,33 @@ test('an active descendant retains its stale ancestor chain, without retaining f
   assert.equal(sessions.has(PARENT), true);
 });
 
+test('a completed child keeps its ancestor chain only until its own visibility expires', () => {
+  const ancestor = session('ancestor');
+  ancestor.lastActivity -= 2 * 60 * MINUTE;
+  const parent = session(PARENT);
+  parent.parentId = ancestor.id;
+  parent.lastActivity = ancestor.lastActivity;
+  parent.completedAt = ancestor.lastActivity;
+  const child = session(CHILD);
+  child.parentId = PARENT;
+  child.completedAt = BASE;
+  const sessions = new Map([ancestor, parent, child].map((item) => [item.id, item]));
+  assert.deepEqual(new Set(visible(sessions, BASE + MINUTE - 1)), new Set(['ancestor', PARENT, CHILD]));
+  assert.deepEqual(visible(sessions, BASE + MINUTE), []);
+  assert.equal(sessions.has(PARENT), false);
+  assert.equal(sessions.has('ancestor'), false);
+});
+
+test('a stale child cannot extend its own or its ancestors visibility', () => {
+  const parent = session(PARENT);
+  parent.lastActivity -= 2 * 60 * MINUTE;
+  const child = session(CHILD);
+  child.parentId = PARENT;
+  child.taskActive = true;
+  const sessions = new Map([parent, child].map((item) => [item.id, item]));
+  assert.deepEqual(visible(sessions, BASE + 60 * MINUTE + 1), []);
+});
+
 test('completed children retire at sixty seconds despite late metadata and pending tools', async (t) => {
   const doneAt = BASE + 1_000;
   const f = await fixture(t, [[CHILD, [
@@ -149,7 +176,7 @@ test('recovers a long-running turn for retirement without changing the historica
   assert.equal(sessions[0].status, 'idle');
 });
 
-test('discovers an old parent log for a currently running child and releases it after completion', async (t) => {
+test('discovers an old parent log and releases it when the completed child retires', async (t) => {
   const old = BASE - 2 * 24 * 60 * MINUTE;
   const f = await fixture(t, [
     [PARENT, [meta(PARENT, old), start(old), complete(old + 1)]],
@@ -158,7 +185,19 @@ test('discovers an old parent log for a currently running child and releases it 
   await utimes(f.paths.get(PARENT), new Date(old), new Date(old));
   assert.deepEqual(new Set((await f.watcher.scan(BASE)).map(({ id }) => id)), new Set([PARENT, CHILD]));
   await f.append(CHILD, [complete(BASE + 1_000)]);
-  assert.deepEqual((await f.watcher.scan(BASE + 1_000)).map(({ id }) => id), [CHILD]);
+  assert.deepEqual(new Set((await f.watcher.scan(BASE + 1_000)).map(({ id }) => id)), new Set([PARENT, CHILD]));
+  assert.deepEqual(new Set(f.watcher.getSessions(BASE + 60_999).map(({ id }) => id)), new Set([PARENT, CHILD]));
+  assert.equal(f.watcher.getSessions(BASE + 61_000).length, 0);
+});
+
+test('cold start restores an old parent during the completed child grace period', async (t) => {
+  const old = BASE - 2 * 24 * 60 * MINUTE;
+  const f = await fixture(t, [
+    [PARENT, [meta(PARENT, old), start(old), complete(old + 1)]],
+    [CHILD, [meta(CHILD, BASE, PARENT), start(BASE), complete(BASE + 1_000)]],
+  ]);
+  await utimes(f.paths.get(PARENT), new Date(old), new Date(old));
+  assert.deepEqual(new Set((await f.watcher.scan(BASE + 60_999)).map(({ id }) => id)), new Set([PARENT, CHILD]));
   assert.equal(f.watcher.getSessions(BASE + 61_000).length, 0);
 });
 
@@ -463,7 +502,7 @@ test('cold recovery keeps an ID-less started child when context later supplies i
   assert.equal(internal.codexTurnId, 'turn-one');
   assert.equal(sessions.find(({ id }) => id === CHILD).status, 'idle');
   await f.append(CHILD, [complete(BASE + 21 * MINUTE)]);
-  assert.deepEqual((await f.watcher.scan(BASE + 21 * MINUTE)).map(({ id }) => id), [CHILD]);
+  assert.deepEqual(new Set((await f.watcher.scan(BASE + 21 * MINUTE)).map(({ id }) => id)), new Set([PARENT, CHILD]));
   assert.equal(f.watcher.getSessions(BASE + 22 * MINUTE).length, 0);
 });
 
