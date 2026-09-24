@@ -12,9 +12,9 @@
 
 ## デモ
 
-[![架空の2つのプロジェクトとセッションを表示したAgentarium Space](docs/media/agentarium-space-demo.png)](https://github.com/user-attachments/assets/a169b21c-dd2a-4394-bf39-6629e870cc62)
+[![架空の2つのプロジェクトとセッションを表示したAgentarium Space](docs/media/agentarium-space-demo.png)](https://github.com/user-attachments/assets/d8f7ca2f-49f0-4e0d-a3d3-e43cd53eca5c)
 
-[24秒のデモ動画を見る](https://github.com/user-attachments/assets/a169b21c-dd2a-4394-bf39-6629e870cc62) · 音声なし
+[24秒のデモ動画を見る](https://github.com/user-attachments/assets/d8f7ca2f-49f0-4e0d-a3d3-e43cd53eca5c) · 音声なし
 
 セッション・指示・プロジェクトのパスはすべて架空のデータを使い、実際のアプリで撮影しています。
 [デモの撮影方法](docs/demo.md)も公開しています。
@@ -95,7 +95,8 @@ pnpm test         # テストを実行
 - **ハローの呼吸** = 考え中 / **中輝度** = 入力待ち / **減光 + 目を閉じる** = アイドル
 - **周回する小さな光** = sub-agent（親の周りを回る。親との関係線上を光が流れていたら稼働中）
 - 非稼働セッションは 15 分、完了済みの Codex sub-agent・auto-review は 60 秒でフェードアウトします。実行中の処理とその親は活動ウィンドウ内で残り、作業が再開すれば再表示します。元のアプリでタスクを開いていても表示時間は延長しません
-- **ネームプレート** = 各 orb の下にセッション名と「いまやっていること」（ツール名: 対象・経過時間）。新しい発話は引出線付きの注記として表示
+- **ネームプレート** = 各 orb の下にセッション名と「いまやっていること」（ツール名: 対象・経過時間）
+- **引出線の注記** = 最新の発話を常時表示。メインエージェントは取得済み情報と空き領域に応じて、応答処理の状態・実行結果・セッション情報も表示
 - **ヘッダ HUD** = 現在時刻 / 状態別カウント / SYNC（最終受信からの経過）/ イベント毎分スパークライン / LINK 状態
 - **SECTOR 表記** = プロジェクトの潮だまり（`SECTOR-A ─ 名前 ─ N UNITS`）。全高の LIVE STREAM モジュールには直近の行動が流れる
 - orb をクリックすると計器パネル（エージェントツリー / ステータスタイムライン / cwd / ブランチ / ライブストリーム）。10 分超の長時間実行は `LONG RUN`、切断時は `LINK LOST` 表示

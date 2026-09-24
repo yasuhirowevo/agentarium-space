@@ -12,9 +12,9 @@ smaller lights orbiting their parent and dissolve into particles when their work
 
 ## Demo
 
-[![Agentarium Space showing two fictional projects and their sessions](docs/media/agentarium-space-demo.png)](https://github.com/user-attachments/assets/a169b21c-dd2a-4394-bf39-6629e870cc62)
+[![Agentarium Space showing two fictional projects and their sessions](docs/media/agentarium-space-demo.png)](https://github.com/user-attachments/assets/d8f7ca2f-49f0-4e0d-a3d3-e43cd53eca5c)
 
-[Watch the 24-second demo](https://github.com/user-attachments/assets/a169b21c-dd2a-4394-bf39-6629e870cc62) · No audio
+[Watch the 24-second demo](https://github.com/user-attachments/assets/d8f7ca2f-49f0-4e0d-a3d3-e43cd53eca5c) · No audio
 
 Recorded in the app using fictional sessions, prompts, and project paths.
 See [how to record the demo](docs/demo.md).
@@ -97,7 +97,8 @@ Environment variables:
 - **Breathing halo** = thinking / **medium glow** = waiting for input / **dimmed + closed eyes** = idle
 - **Orbiting smaller lights** = sub-agents. They orbit their parent; a light traveling along the parent link indicates activity
 - Inactive sessions fade out after 15 minutes; completed Codex sub-agents and auto-reviews fade out after 60 seconds. Running work and its parents remain within the activity window, and resumed sessions reappear. Keeping a task open in its source app does not extend its display time
-- **Nameplate** = the session name and current activity (tool name: target and elapsed time). New messages appear as leader-line callouts
+- **Nameplate** = the session name and current activity (tool name: target and elapsed time)
+- **Leader-line callouts** = persistent latest speech; main agents also show turn status, execution results, and session details when data and space allow
 - **Header HUD** = current time / status counts / SYNC (time since the last update) / events-per-minute sparkline / LINK status
 - **SECTOR label** = a project's tide pool (`SECTOR-A ─ NAME ─ N UNITS`). The full-height LIVE STREAM module shows recent activity
 - Click an orb to open its instrument panel (agent tree / status timeline / cwd / branch / live stream). Runs longer than 10 minutes show `LONG RUN`; disconnections show `LINK LOST`
