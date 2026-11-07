@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.log
+.pnpm-store/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.p8
