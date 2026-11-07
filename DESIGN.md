@@ -4,6 +4,15 @@
 セッションと sub-agent を「星図の下で発光する生き物たちの生態系」として鳥瞰表示するデスクトップアプリ。
 本書は**仕様の正典**。デザイン判断の「なぜ」と拡張時の判断基準は [PHILOSOPHY.md](./PHILOSOPHY.md) を参照。
 
+## Claude の途中発話と完了応答（v2.34）
+
+- Claude の assistant text は `message.stop_reason === "tool_use"` の場合に `commentary` とし、
+  `end_turn`・未設定・未知値は従来どおり `final` とする。通常の追記と初回の先頭領域で同じ分類を使う。
+- ツール実行へ続く text-only レコードは応答完了として扱わず、後続ツールが届く前も `thinking` を維持する。
+  `final` の text-only レコードは従来どおり時間経過で `waiting` へ移る。既存の idle 判定は維持する。
+- 後続の空の text／tool レコードで直前の発話を消さず、thinking・sidechain の内容は表示に使わない。
+- v2.27 以降の常時表示・配置・描画を維持する。途中発話だけを一定秒数で消す処理は追加しない。
+
 ## 配布先設定と紹介素材（v2.33）
 
 - Homebrew の配布先は `HOMEBREW_TAP_REPOSITORY` で指定し、リポジトリ名をソースに固定しない。

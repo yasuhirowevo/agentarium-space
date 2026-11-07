@@ -98,6 +98,10 @@ function messageContent(record) {
   return [];
 }
 
+function assistantMessageKind(record) {
+  return record?.message?.stop_reason === 'tool_use' ? 'commentary' : 'final';
+}
+
 function applyCommonFields(session, record) {
   if (typeof record.sessionId === 'string') session.id = record.sessionId;
   if (typeof record.cwd === 'string') session.cwd = normalizeCwd(record.cwd);
@@ -315,10 +319,13 @@ function applyRecord(session, record) {
     .filter((item) => item?.type === 'text' && typeof item.text === 'string')
     .map((item) => item.text)
     .join(' ');
-  setLastMessage(session, assistantText, time);
+  const messageKind = assistantMessageKind(record);
+  setLastMessage(session, assistantText, time, messageKind);
 
   const isTextOnly = content.length > 0 && content.every((item) => item?.type === 'text');
-  session.lastMainKind = isTextOnly ? 'assistant_text' : 'assistant_other';
+  session.lastMainKind = isTextOnly && messageKind === 'final'
+    ? 'assistant_text'
+    : 'assistant_other';
 }
 
 function applyMetaRecord(session, record) {
@@ -348,7 +355,7 @@ function applyMetaRecord(session, record) {
       .filter((item) => item?.type === 'text' && typeof item.text === 'string')
       .map((item) => item.text)
       .join(' ');
-    setLastMessage(session, assistantText, time);
+    setLastMessage(session, assistantText, time, assistantMessageKind(record));
     return;
   }
   if (!content.some((item) => item?.type === 'tool_result')) {
